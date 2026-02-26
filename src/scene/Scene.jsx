@@ -8,201 +8,188 @@ import Model from "./Model"
 import CameraRig from "./CameraRig"
 import useDebugControls from "./DebugControls"
 import Tooltip from "./Tooltip"
+import DustMotes from "./DustMotes"
+import CursorSparkle from "./CursorSparkle"
+import WeatherSystem from "./WeatherSystem"
+import VolumeSlider from "./VolumeSlider"
+import { useSeasonalTheme, SeasonButton, SEASONS } from "./SeasonalTheme"
+import {
+  UIThemeProvider, useUITheme,
+  ThemedButton, ThemeToggleButton,
+} from "./UITheme"
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Multi-Mood Lo-Fi Audio Engine
-// 5 procedural moods, each with distinct character.
-// Randomly picks a new mood every 40-65 seconds and crossfades smoothly.
-// No external files — everything synthesised via Web Audio API.
+// Audio — heavily de-staticified, sine pads only, no Karplus noise
+// We replaced the harsh Karplus-Strong with pure sine-wave bell tones
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Each mood builder returns an array of AudioNode objects to be stopped/GC'd on swap
-function buildMood(ctx, busGain, moodId) {
-  const nodes = []
+function makeReverb(ctx, busGain, nodes, wet = 0.16) {
+  const track  = (n) => { nodes.push(n); return n }
+  const input  = track(ctx.createGain()); input.gain.value = 1.0
+  const output = track(ctx.createGain()); output.gain.value = wet
+  output.connect(busGain)
+  // 3 short comb filters — tight, minimal ringing
+  [0.013, 0.021, 0.031].forEach((dt, i) => {
+    const d = track(ctx.createDelay(0.5)); d.delayTime.value = dt
+    const g = track(ctx.createGain());    g.gain.value = 0.22 - i * 0.04
+    const f = track(ctx.createBiquadFilter())
+    f.type = "lowpass"; f.frequency.value = 900 - i * 120; f.Q.value = 0.2
+    input.connect(d); d.connect(f); f.connect(g); g.connect(output)
+    g.connect(d)
+  })
+  return input
+}
+
+// Bell tone: pure sine + one harmonic, very clean, no noise
+function bellNote(ctx, busGain, reverb, freq, vol, t0, decay, nodes) {
   const track = (n) => { nodes.push(n); return n }
+  const osc  = track(ctx.createOscillator())
+  const osc2 = track(ctx.createOscillator())
+  const env  = track(ctx.createGain())
+  osc.type  = "sine"; osc.frequency.value = freq
+  osc2.type = "sine"; osc2.frequency.value = freq * 2.756  // inharmonic partial — bell character
+  osc.connect(env); osc2.connect(env)
+  env.connect(busGain)
+  if (reverb) env.connect(reverb)
+  // Envelope: short attack, long decay
+  env.gain.setValueAtTime(0, t0)
+  env.gain.linearRampToValueAtTime(vol,    t0 + 0.008)
+  env.gain.setValueAtTime(vol,             t0 + 0.012)
+  env.gain.exponentialRampToValueAtTime(0.0001, t0 + decay)
+  osc.start(t0);  osc.stop(t0 + decay + 0.05)
+  osc2.start(t0); osc2.stop(t0 + decay * 0.6)
+}
 
-  // Helper: create a filtered oscillator connected to busGain
-  const osc = (type, freq, gainVal, detune = 0) => {
-    const o = track(ctx.createOscillator())
-    const g = track(ctx.createGain())
-    o.type = type
-    o.frequency.value = freq
-    o.detune.value = detune
-    g.gain.value = gainVal
-    o.connect(g); g.connect(busGain)
-    return o
+// Schedule repeating bell melody
+function scheduleBells(ctx, busGain, reverb, freqs, times, loopLen, vol, nodes) {
+  const timers = []
+  let loopStart = ctx.currentTime
+  function loop() {
+    freqs.forEach((f, i) => bellNote(ctx, busGain, reverb, f, vol, loopStart + times[i], 2.5, nodes))
+    loopStart += loopLen
+    timers.push(setTimeout(loop, (loopLen - 0.5) * 1000))
   }
+  loop()
+  nodes.push({ stop: () => timers.forEach(clearTimeout) })
+}
 
-  // Helper: bandpass or lowpass filter node
-  const filter = (type, freq, Q = 1) => {
-    const f = track(ctx.createBiquadFilter())
-    f.type = type; f.frequency.value = freq; f.Q.value = Q
-    f.connect(busGain); return f
+// Warm sine pad — multi-voice, pure, heavy LP
+function padChord(ctx, busGain, reverb, freqs, vol, nodes, lpHz = 900) {
+  const track = (n) => { nodes.push(n); return n }
+  const lp = track(ctx.createBiquadFilter())
+  lp.type = "lowpass"; lp.frequency.value = lpHz; lp.Q.value = 0.25
+  lp.connect(busGain)
+  if (reverb) lp.connect(reverb)
+
+  const perVoice = Math.min(vol / freqs.length * 0.28, 0.06)
+
+  freqs.forEach((f, i) => {
+    const o  = track(ctx.createOscillator())
+    const o2 = track(ctx.createOscillator())
+    const g  = track(ctx.createGain())
+    o.type  = "sine"; o.frequency.value  = f * (1 + i * 0.0002)
+    o2.type = "sine"; o2.frequency.value = f * (1 - i * 0.0003)
+    g.gain.value = perVoice
+    o.connect(g); o2.connect(g); g.connect(lp)
+    o.start(ctx.currentTime + i * 0.06)
+    o2.start(ctx.currentTime + i * 0.09)
+  })
+
+  // Gentle filter LFO — breathing effect
+  const lfo = track(ctx.createOscillator())
+  const lfoG = track(ctx.createGain())
+  lfo.type = "sine"; lfo.frequency.value = 0.06; lfoG.gain.value = 70
+  lfo.connect(lfoG); lfoG.connect(lp.frequency); lfo.start()
+}
+
+// Gentle pre-smoothed noise for rain/vinyl textures only
+function addTexture(ctx, busGain, nodes, vol, hpHz = 2000, lpHz = 7000) {
+  const track = (n) => { nodes.push(n); return n }
+  const sr = ctx.sampleRate
+  // 6 seconds of pre-smoothed noise
+  const buf = ctx.createBuffer(1, sr * 6, sr)
+  const d = buf.getChannelData(0)
+  let prev = 0
+  for (let i = 0; i < d.length; i++) {
+    prev = prev * 0.9 + (Math.random() * 2 - 1) * 0.1  // heavy smoothing
+    d[i] = prev
   }
+  const src = track(ctx.createBufferSource()); src.buffer = buf; src.loop = true
+  const hp  = track(ctx.createBiquadFilter()); hp.type = "highpass"; hp.frequency.value = hpHz; hp.Q.value = 0.3
+  const lp  = track(ctx.createBiquadFilter()); lp.type = "lowpass";  lp.frequency.value = lpHz; lp.Q.value = 0.2
+  const g   = track(ctx.createGain());         g.gain.value = vol
+  src.connect(hp); hp.connect(lp); lp.connect(g); g.connect(busGain)
+  src.start()
+}
 
-  // Helper: filtered noise (white noise → filter → busGain)
-  const noise = (gainVal, filterFreq, filterType = "bandpass", Q = 2) => {
-    const bufSize = ctx.sampleRate * 2
-    const buf = ctx.createBuffer(1, bufSize, ctx.sampleRate)
-    const data = buf.getChannelData(0)
-    for (let i = 0; i < bufSize; i++) data[i] = Math.random() * 2 - 1
-    const src = track(ctx.createBufferSource())
-    src.buffer = buf; src.loop = true
-    const f = track(ctx.createBiquadFilter())
-    f.type = filterType; f.frequency.value = filterFreq; f.Q.value = Q
-    const g = track(ctx.createGain()); g.gain.value = gainVal
-    src.connect(f); f.connect(g); g.connect(busGain)
-    src.start(); return src
-  }
+// ─────────────────────────────────────────────────────────────────────────────
+// Mood builders — all pure sine, no harsh noise
+// ─────────────────────────────────────────────────────────────────────────────
+function buildMood(ctx, busGain, moodId, cfg = {}) {
+  const nodes  = []
+  const rv     = makeReverb(ctx, busGain, nodes, cfg.audioReverbWet ?? 0.16)
+  const padMul = cfg.audioPadVol    ?? 1.0
+  const melMul = cfg.audioMelodyVol ?? 1.0
+  const lpHz   = cfg.audioLowpassHz ?? 900
+  const hiss   = cfg.audioHissVol   ?? 0.003
 
-  // Helper: slow LFO attached to a gain node (tremolo / filter sweep)
-  const lfo = (targetParam, rate, depth, centerVal) => {
-    const l = track(ctx.createOscillator())
-    const lg = track(ctx.createGain())
-    l.type = "sine"; l.frequency.value = rate
-    lg.gain.value = depth
-    // Set center manually
-    targetParam.value = centerVal
-    l.connect(lg); lg.connect(targetParam)
-    l.start(); return l
-  }
-
-  // ── MOOD 0 · "Cozy Room" ───────────────────────────────────────────────────
-  // Warm A-minor pentatonic pad, the classic lo-fi home base
   if (moodId === 0) {
-    const FREQS = [110, 130.81, 146.83, 164.81, 196, 220]
-    const lp = track(ctx.createBiquadFilter())
-    lp.type = "lowpass"; lp.frequency.value = 800; lp.Q.value = 0.7
-    lp.connect(busGain)
-    FREQS.forEach((f, i) => {
-      const o = track(ctx.createOscillator())
-      const g = track(ctx.createGain())
-      o.type = i % 2 === 0 ? "sine" : "triangle"
-      o.frequency.value = f * (1 + (i % 2 === 0 ? 0.0007 : -0.0007))
-      g.gain.value = 0.045 / FREQS.length
-      o.connect(g); g.connect(lp)
-      o.start(ctx.currentTime + i * 0.12)
-    })
-    // Slow tremolo LFO on the filter cutoff
-    const lfoO = track(ctx.createOscillator())
-    const lfoG = track(ctx.createGain())
-    lfoO.frequency.value = 0.1; lfoG.gain.value = 120
-    lp.frequency.value = 800
-    lfoO.connect(lfoG); lfoG.connect(lp.frequency)
-    lfoO.start()
+    // "Cozy Room" — Fmaj7 pad + gentle bell melody
+    padChord(ctx, busGain, rv, [87.31, 110, 130.81, 164.81], 0.09 * padMul, nodes, lpHz)
+    scheduleBells(ctx, busGain, rv,
+      [349.23, 392, 440, 523.25, 587.33, 523.25, 440],
+      [0, 1.4, 2.8, 4.2, 5.8, 7.4, 9.0],
+      11.0, 0.028 * melMul, nodes)
+    addTexture(ctx, busGain, nodes, hiss, 4000, 8000)   // very faint hiss
   }
-
-  // ── MOOD 1 · "Rainy Night" ─────────────────────────────────────────────────
-  // Soft rain texture + sparse high plucks + deep bass drone
   else if (moodId === 1) {
-    // Rain: bandpass-filtered white noise at several rain frequencies
-    noise(0.018, 3000, "bandpass", 0.8)
-    noise(0.012, 8000, "bandpass", 0.5)
-    noise(0.008, 1200, "lowpass",  1.0)
-
-    // Deep bass drone — E1
-    const bassO = osc("sine", 41.2, 0.055, 0)
-    bassO.start()
-
-    // Sparse high plucks — G4, A4, C5 arpeggiated slowly
-    const pluckFreqs = [392, 440, 523.25, 392, 523.25, 440]
-    const pluckTimes = [0,    2.8, 5.5,  9.1,  12.4,  16.2]
-    pluckFreqs.forEach((pf, i) => {
-      const po = track(ctx.createOscillator())
-      const pg = track(ctx.createGain())
-      po.type = "sine"; po.frequency.value = pf
-      const t0 = ctx.currentTime + pluckTimes[i % pluckTimes.length] + Math.random() * 0.3
-      pg.gain.setValueAtTime(0, t0)
-      pg.gain.linearRampToValueAtTime(0.045, t0 + 0.01)
-      pg.gain.exponentialRampToValueAtTime(0.0001, t0 + 1.8)
-      po.connect(pg); pg.connect(busGain)
-      po.start(t0); po.stop(t0 + 1.9)
-    })
+    // "Rainy Night" — Dm7 + rain texture
+    addTexture(ctx, busGain, nodes, hiss * 2.5, 1600, 4000)  // rain: lower band
+    padChord(ctx, busGain, rv, [73.42, 87.31, 110, 130.81], 0.08 * padMul, nodes, Math.min(lpHz, 800))
+    scheduleBells(ctx, busGain, rv,
+      [587.33, 523.25, 440, 523.25],
+      [0, 5.0, 11.0, 17.0],
+      22.0, 0.020 * melMul, nodes)
+    addTexture(ctx, busGain, nodes, hiss * 0.5, 5000, 9000)
   }
-
-  // ── MOOD 2 · "Deep Focus" ──────────────────────────────────────────────────
-  // Low sub drone, slow beating, meditative and minimal
   else if (moodId === 2) {
-    // Twin detuned subs create slow beating (~0.5 Hz = 1 beat/2sec)
-    const freqA = 55, freqB = 55.28
-    const sA = osc("sine", freqA,  0.06);  sA.start()
-    const sB = osc("sine", freqB,  0.05);  sB.start()
-    // 5th harmonic overtone, very quiet
-    const s5 = osc("triangle", 82.5, 0.018); s5.start()
-    // Very slow filter sweep
-    const lp = track(ctx.createBiquadFilter())
-    lp.type = "lowpass"; lp.frequency.value = 400; lp.Q.value = 1.5
-    // Detach sA from busGain and route through filter instead
-    // (We already connected above, so just add a parallel path through filter)
-    const reSrc = osc("sine", 110, 0.025); reSrc.start()
-    // Slow LFO on filter cutoff: 300–700 Hz over 8s
-    const lfoO2 = track(ctx.createOscillator())
-    const lfoG2 = track(ctx.createGain())
-    lfoO2.frequency.value = 0.07; lfoG2.gain.value = 180
-    lp.frequency.value = 500
-    lfoO2.connect(lfoG2); lfoG2.connect(lp.frequency)
-    lfoO2.start()
-    reSrc.connect(lp); lp.connect(busGain)
+    // "Deep Focus" — Am drone + binaural beating
+    padChord(ctx, busGain, rv, [55, 82.41, 110, 130.81], 0.07 * padMul, nodes, Math.min(lpHz, 750))
+    const b1 = nodes[nodes.push(ctx.createOscillator())-1]; const bg1 = nodes[nodes.push(ctx.createGain())-1]
+    const b2 = nodes[nodes.push(ctx.createOscillator())-1]; const bg2 = nodes[nodes.push(ctx.createGain())-1]
+    b1.type = "sine"; b1.frequency.value = 55;    bg1.gain.value = 0.018
+    b2.type = "sine"; b2.frequency.value = 55.18; bg2.gain.value = 0.016
+    b1.connect(bg1); bg1.connect(busGain)
+    b2.connect(bg2); bg2.connect(busGain)
+    b1.start(); b2.start()
+    scheduleBells(ctx, busGain, rv, [880, 783.99], [0, 7.0], 15.0, 0.016 * melMul, nodes)
+    addTexture(ctx, busGain, nodes, hiss * 0.6, 4500, 9000)
   }
-
-  // ── MOOD 3 · "Dawn Light" ──────────────────────────────────────────────────
-  // Brighter C-major pentatonic, slightly faster, optimistic
   else if (moodId === 3) {
-    // C major pentatonic: C3, E3, G3, A3, C4, E4
-    const FREQS = [130.81, 164.81, 196, 220, 261.63, 329.63]
-    FREQS.forEach((f, i) => {
-      const o = track(ctx.createOscillator())
-      const g = track(ctx.createGain())
-      o.type = i < 3 ? "sine" : "triangle"
-      o.frequency.value = f * (1 + (i % 2 === 0 ? 0.0005 : -0.0009))
-      g.gain.value = 0.048 / FREQS.length
-      o.connect(g); g.connect(busGain)
-      o.start(ctx.currentTime + i * 0.08)
-    })
-    // Faster tremolo than cozy room
-    const lp = track(ctx.createBiquadFilter())
-    lp.type = "lowpass"; lp.frequency.value = 1200; lp.Q.value = 0.5
-    lp.connect(busGain)
-    const highO = osc("sine", 523.25, 0.012); highO.start()
-    // Gentle high LFO ping-pong 
-    const lfoO = track(ctx.createOscillator())
-    const lfoG = track(ctx.createGain())
-    lfoO.frequency.value = 0.22; lfoG.gain.value = 0.008
-    lfoO.connect(lfoG); lfoG.connect(busGain.gain)
-    lfoO.start()
+    // "Dawn Light" — Cmaj9 bright
+    padChord(ctx, busGain, rv, [65.41, 98, 164.81, 246.94], 0.09 * padMul, nodes, lpHz)
+    scheduleBells(ctx, busGain, rv,
+      [523.25, 659.25, 783.99, 880, 783.99, 659.25],
+      [0, 1.0, 2.1, 3.3, 4.5, 5.8],
+      8.0, 0.024 * melMul, nodes)
+    addTexture(ctx, busGain, nodes, hiss * 0.4, 5000, 9000)
   }
-
-  // ── MOOD 4 · "Vinyl Haze" ─────────────────────────────────────────────────
-  // Detuned warm chords + vinyl crackle texture + tape warble LFO
   else if (moodId === 4) {
-    // Vinyl crackle: sparse low-level noise bursts
-    noise(0.014, 4500, "bandpass", 0.4)   // hiss
-    noise(0.008, 12000, "highpass", 0.3)   // sibilance
-
-    // Warm chord: Am7 — A, C, E, G
-    const CHORD = [110, 130.81, 164.81, 196]
-    CHORD.forEach((f, i) => {
-      const o = track(ctx.createOscillator())
-      const g = track(ctx.createGain())
-      // Heavy detuning for that worn cassette feel
-      o.type = "triangle"
-      o.frequency.value = f
-      g.gain.value = 0.055 / CHORD.length
-      o.connect(g); g.connect(busGain)
-      o.start(ctx.currentTime + i * 0.06)
-    })
-    // Tape warble: slow sinusoidal pitch drift on all oscillators via master detune
-    // (applied via a shared detune LFO — simulated with a filter wobble)
-    const lp = track(ctx.createBiquadFilter())
-    lp.type = "lowpass"; lp.frequency.value = 700; lp.Q.value = 1.2
-    lp.connect(busGain)
-    const warbleO = track(ctx.createOscillator())
-    const warbleG = track(ctx.createGain())
-    warbleO.frequency.value = 0.18   // ~0.18 Hz = tape warble
-    warbleG.gain.value = 80
-    lp.frequency.value = 700
-    warbleO.connect(warbleG); warbleG.connect(lp.frequency)
-    warbleO.start()
+    // "Vinyl Haze" — Am7, heavy filter, slow warble
+    padChord(ctx, busGain, rv, [55, 65.41, 82.41, 98], 0.10 * padMul, nodes, Math.min(lpHz, 700))
+    const wlp = nodes[nodes.push(ctx.createBiquadFilter())-1]
+    wlp.type = "lowpass"; wlp.frequency.value = 720; wlp.Q.value = 0.8
+    wlp.connect(busGain)
+    const warble = nodes[nodes.push(ctx.createOscillator())-1]
+    const wg     = nodes[nodes.push(ctx.createGain())-1]
+    warble.frequency.value = 0.11; wg.gain.value = 38
+    warble.connect(wg); wg.connect(wlp.frequency); warble.start()
+    scheduleBells(ctx, busGain, rv,
+      [440, 523.25, 440, 392],
+      [0, 6.0, 13.5, 21.0],
+      28.0, 0.018 * melMul, nodes)
+    addTexture(ctx, busGain, nodes, hiss * 3.0, 3000, 7000) // more vinyl texture
+    addTexture(ctx, busGain, nodes, hiss * 0.8, 6000, 9000)
   }
 
   return nodes
@@ -210,117 +197,93 @@ function buildMood(ctx, busGain, moodId) {
 
 const MOOD_NAMES  = ["Cozy Room", "Rainy Night", "Deep Focus", "Dawn Light", "Vinyl Haze"]
 const MOOD_EMOJIS = ["🛋", "🌧", "🎯", "🌅", "📼"]
-// How long each mood plays before crossfading to a new random one (ms)
-const MOOD_DURATION_MIN = 40_000
-const MOOD_DURATION_MAX = 65_000
-const CROSSFADE_DURATION = 4.0  // seconds
+const MOOD_DUR_MIN = 40_000, MOOD_DUR_MAX = 65_000
 
-function useAmbientAudio() {
+// ─────────────────────────────────────────────────────────────────────────────
+// useAmbientAudio
+// ─────────────────────────────────────────────────────────────────────────────
+function useAmbientAudio(debug) {
   const ctxRef       = useRef(null)
-  const masterRef    = useRef(null)   // master gain → destination
-  const busARef      = useRef(null)   // current mood's bus gain
-  const busBRef      = useRef(null)   // incoming mood's bus gain (crossfade target)
-  const nodesARef    = useRef([])     // current mood's oscillator nodes
+  const masterRef    = useRef(null)
+  const busARef      = useRef(null)
+  const busBRef      = useRef(null)
+  const nodesARef    = useRef([])
   const nodesBRef    = useRef([])
   const startedRef   = useRef(false)
   const moodTimerRef = useRef(null)
   const currentMood  = useRef(0)
 
-  const [muted,     setMuted]     = useState(false)
-  const [moodName,  setMoodName]  = useState(MOOD_NAMES[0])
-  const [moodEmoji, setMoodEmoji] = useState(MOOD_EMOJIS[0])
+  const [muted,     setMuted]       = useState(false)
+  const [volume,    setVolumeState] = useState(0.65)
+  const [moodName,  setMoodName]    = useState(MOOD_NAMES[0])
+  const [moodEmoji, setMoodEmoji]   = useState(MOOD_EMOJIS[0])
 
-  // Pick a random mood index different from current
-  const pickNextMood = (cur) => {
-    let next
-    do { next = Math.floor(Math.random() * MOOD_NAMES.length) } while (next === cur)
-    return next
-  }
+  const pickNext = (cur) => { let n; do { n = Math.floor(Math.random() * MOOD_NAMES.length) } while (n === cur); return n }
 
-  const crossfadeToMood = useCallback((nextId) => {
-    const ctx = ctxRef.current
-    if (!ctx || !masterRef.current) return
-
+  const crossfade = useCallback((nextId) => {
+    const ctx = ctxRef.current; if (!ctx || !masterRef.current) return
+    const cf  = debug?.audioCrossfadeS ?? 4.0
     const now = ctx.currentTime
-    const cf  = CROSSFADE_DURATION
 
-    // Build incoming mood on busB, gain starts at 0
     const busB = ctx.createGain()
     busB.gain.setValueAtTime(0, now)
     busB.connect(masterRef.current)
     busBRef.current = busB
-
-    const nodesB = buildMood(ctx, busB, nextId)
-    nodesBRef.current = nodesB
-
-    // Fade in new
+    nodesBRef.current = buildMood(ctx, busB, nextId, debug)
     busB.gain.linearRampToValueAtTime(1.0, now + cf)
 
-    // Fade out old bus
     if (busARef.current) {
       busARef.current.gain.cancelScheduledValues(now)
       busARef.current.gain.setValueAtTime(busARef.current.gain.value, now)
       busARef.current.gain.linearRampToValueAtTime(0, now + cf)
     }
 
-    // After crossfade, stop old nodes and swap refs
     setTimeout(() => {
-      nodesARef.current.forEach(n => { try { n.stop?.() } catch(e) {} })
-      nodesARef.current = nodesBRef.current
-      nodesBRef.current = []
+      nodesARef.current.forEach(n => { try { n.stop?.() } catch(e){} })
+      nodesARef.current = nodesBRef.current; nodesBRef.current = []
       if (busARef.current) busARef.current.disconnect()
-      busARef.current = busBRef.current
-      busBRef.current = null
-    }, cf * 1000 + 200)
+      busARef.current = busBRef.current; busBRef.current = null
+    }, cf * 1000 + 300)
 
     currentMood.current = nextId
-    setMoodName(MOOD_NAMES[nextId])
-    setMoodEmoji(MOOD_EMOJIS[nextId])
-
-    // Schedule next crossfade
-    const nextIn = MOOD_DURATION_MIN + Math.random() * (MOOD_DURATION_MAX - MOOD_DURATION_MIN)
-    moodTimerRef.current = setTimeout(() => {
-      crossfadeToMood(pickNextMood(nextId))
-    }, nextIn)
-  }, [])
+    setMoodName(MOOD_NAMES[nextId]); setMoodEmoji(MOOD_EMOJIS[nextId])
+    moodTimerRef.current = setTimeout(() => crossfade(pickNext(nextId)),
+      MOOD_DUR_MIN + Math.random() * (MOOD_DUR_MAX - MOOD_DUR_MIN))
+  }, [debug])
 
   const start = useCallback(() => {
     if (startedRef.current) return
     startedRef.current = true
-
     try {
       const ctx = new (window.AudioContext || window.webkitAudioContext)()
       ctxRef.current = ctx
-
-      // Master gain — fades in over 3s
       const master = ctx.createGain()
+      // Slow fade-in — prevents click on page load
       master.gain.setValueAtTime(0, ctx.currentTime)
-      master.gain.linearRampToValueAtTime(0.75, ctx.currentTime + 3)
+      master.gain.linearRampToValueAtTime(debug?.audioMasterVol ?? 0.65, ctx.currentTime + 6)
       master.connect(ctx.destination)
       masterRef.current = master
 
-      // Start initial mood (random pick on first load)
-      const firstMood = Math.floor(Math.random() * MOOD_NAMES.length)
-      currentMood.current = firstMood
-      setMoodName(MOOD_NAMES[firstMood])
-      setMoodEmoji(MOOD_EMOJIS[firstMood])
-
-      const busA = ctx.createGain()
-      busA.gain.value = 1.0
-      busA.connect(master)
+      const first = Math.floor(Math.random() * MOOD_NAMES.length)
+      currentMood.current = first
+      setMoodName(MOOD_NAMES[first]); setMoodEmoji(MOOD_EMOJIS[first])
+      const busA = ctx.createGain(); busA.gain.value = 1.0; busA.connect(master)
       busARef.current = busA
-
-      const nodesA = buildMood(ctx, busA, firstMood)
-      nodesARef.current = nodesA
-
-      // Schedule first auto-crossfade
-      const nextIn = MOOD_DURATION_MIN + Math.random() * (MOOD_DURATION_MAX - MOOD_DURATION_MIN)
-      moodTimerRef.current = setTimeout(() => {
-        crossfadeToMood(pickNextMood(firstMood))
-      }, nextIn)
-
+      nodesARef.current = buildMood(ctx, busA, first, debug)
+      moodTimerRef.current = setTimeout(() => crossfade(pickNext(first)),
+        MOOD_DUR_MIN + Math.random() * (MOOD_DUR_MAX - MOOD_DUR_MIN))
     } catch(e) { console.warn("Audio init failed:", e) }
-  }, [crossfadeToMood])
+  }, [crossfade, debug])
+
+  const setVolume = useCallback((v) => {
+    setVolumeState(v)
+    if (masterRef.current && ctxRef.current) {
+      const now = ctxRef.current.currentTime
+      masterRef.current.gain.cancelScheduledValues(now)
+      masterRef.current.gain.setValueAtTime(masterRef.current.gain.value, now)
+      masterRef.current.gain.linearRampToValueAtTime(muted ? 0 : v, now + 0.12)
+    }
+  }, [muted])
 
   const toggleMute = useCallback(() => {
     setMuted(m => {
@@ -329,175 +292,139 @@ function useAmbientAudio() {
         const now = ctxRef.current.currentTime
         masterRef.current.gain.cancelScheduledValues(now)
         masterRef.current.gain.setValueAtTime(masterRef.current.gain.value, now)
-        masterRef.current.gain.linearRampToValueAtTime(next ? 0 : 0.75, now + 0.7)
+        masterRef.current.gain.linearRampToValueAtTime(next ? 0 : volume, now + 0.6)
       }
       return next
     })
-  }, [])
+  }, [volume])
 
-  // Manual mood skip — jumps immediately to a random new mood
   const skipMood = useCallback(() => {
     if (!startedRef.current) return
     if (moodTimerRef.current) clearTimeout(moodTimerRef.current)
-    crossfadeToMood(pickNextMood(currentMood.current))
-  }, [crossfadeToMood])
+    crossfade(pickNext(currentMood.current))
+  }, [crossfade])
 
-  return { start, muted, toggleMute, skipMood, moodName, moodEmoji }
+  return { start, muted, toggleMute, volume, setVolume, skipMood, moodName, moodEmoji }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Custom Orbit Controls — mouse + touch, yields to CameraRig via lockedRef
+// Custom Orbit Controls
 // ─────────────────────────────────────────────────────────────────────────────
-function CustomOrbitControls({ enabled, selected, lockedRef }) {
+function CustomOrbitControls({ enabled, lockedRef }) {
   const { camera, gl } = useThree()
   const state = useRef({
-    isOrbiting: false, isPanning: false,
-    lastX: 0, lastY: 0,
-    lastDist: 0,
-    theta: Math.atan2(8, 8),
-    phi:   Math.atan2(Math.sqrt(64 + 64), 5),
-    radius: Math.sqrt(8*8 + 5*5 + 8*8),
-    target:    new THREE.Vector3(0, 1.5, 0),
-    panTarget: new THREE.Vector3(0, 1.5, 0),
-    wasLocked: false,
+    isOrbiting:false, isPanning:false,
+    theta: Math.atan2(8,8), phi: 0.95,
+    radius: Math.sqrt(64+25+64),
+    target: new THREE.Vector3(0,1.5,0),
+    panTarget: new THREE.Vector3(0,1.5,0),
+    lastX:0, lastY:0, lastDist:0, wasLocked:false,
   })
 
   useEffect(() => {
     const el = gl.domElement, s = state.current
-
-    const onMouseDown = (e) => {
-      if (!enabled || lockedRef.current) return
-      if (e.button === 0) s.isOrbiting = true
-      if (e.button === 2) s.isPanning  = true
-      s.lastX = e.clientX; s.lastY = e.clientY
-    }
-    const onMouseMove = (e) => {
-      if (!s.isOrbiting && !s.isPanning) return
-      applyDelta(e.clientX - s.lastX, e.clientY - s.lastY, s)
-      s.lastX = e.clientX; s.lastY = e.clientY
-    }
-    const onMouseUp  = () => { s.isOrbiting = false; s.isPanning = false }
-    const onWheel    = (e) => {
-      if (!enabled || lockedRef.current) return
-      s.radius = Math.max(3, Math.min(22, s.radius + e.deltaY * 0.01))
-    }
-    const preventCtx = (e) => e.preventDefault()
-
+    const onMouseDown = (e) => { if (!enabled||lockedRef.current) return; if(e.button===0) s.isOrbiting=true; if(e.button===2) s.isPanning=true; s.lastX=e.clientX; s.lastY=e.clientY }
+    const onMouseMove = (e) => { if(!s.isOrbiting&&!s.isPanning) return; applyDelta(e.clientX-s.lastX,e.clientY-s.lastY,s); s.lastX=e.clientX; s.lastY=e.clientY }
+    const onMouseUp   = ()  => { s.isOrbiting=false; s.isPanning=false }
+    const onWheel     = (e) => { if(!enabled||lockedRef.current) return; s.radius=Math.max(3,Math.min(22,s.radius+e.deltaY*0.01)) }
+    const preventCtx  = (e) => e.preventDefault()
     const onTouchStart = (e) => {
-      if (!enabled || lockedRef.current) return
-      if (e.touches.length === 1) {
-        s.isOrbiting = true
-        s.lastX = e.touches[0].clientX; s.lastY = e.touches[0].clientY
-      } else if (e.touches.length === 2) {
-        s.isOrbiting = false; s.isPanning = false
-        s.lastDist = Math.hypot(
-          e.touches[0].clientX - e.touches[1].clientX,
-          e.touches[0].clientY - e.touches[1].clientY,
-        )
-      }
+      if (!enabled||lockedRef.current) return
+      if (e.touches.length===1) { s.isOrbiting=true; s.lastX=e.touches[0].clientX; s.lastY=e.touches[0].clientY }
+      else if (e.touches.length===2) { s.isOrbiting=false; s.isPanning=false; s.lastDist=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY) }
     }
     const onTouchMove = (e) => {
       e.preventDefault()
-      if (e.touches.length === 1 && s.isOrbiting) {
-        applyDelta(e.touches[0].clientX - s.lastX, e.touches[0].clientY - s.lastY, s)
-        s.lastX = e.touches[0].clientX; s.lastY = e.touches[0].clientY
-      } else if (e.touches.length === 2) {
-        const dist = Math.hypot(
-          e.touches[0].clientX - e.touches[1].clientX,
-          e.touches[0].clientY - e.touches[1].clientY,
-        )
-        s.radius = Math.max(3, Math.min(22, s.radius - (dist - s.lastDist) * 0.04))
-        s.lastDist = dist
-      }
+      if (e.touches.length===1&&s.isOrbiting) { applyDelta(e.touches[0].clientX-s.lastX,e.touches[0].clientY-s.lastY,s); s.lastX=e.touches[0].clientX; s.lastY=e.touches[0].clientY }
+      else if (e.touches.length===2) { const d=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY); s.radius=Math.max(3,Math.min(22,s.radius-(d-s.lastDist)*0.04)); s.lastDist=d }
     }
-    const onTouchEnd = () => { s.isOrbiting = false; s.isPanning = false }
+    const onTouchEnd = () => { s.isOrbiting=false; s.isPanning=false }
 
-    function applyDelta(dx, dy, s) {
-      if (s.isOrbiting) {
-        s.theta -= dx * 0.005
-        s.phi = Math.max(0.1, Math.min(Math.PI / 2.1, s.phi - dy * 0.005))
-      }
-      if (s.isPanning) {
-        const right = new THREE.Vector3()
-        right.crossVectors(camera.getWorldDirection(new THREE.Vector3()), new THREE.Vector3(0,1,0)).normalize()
-        const ps = s.radius * 0.001
-        s.panTarget.addScaledVector(right, -dx * ps)
-        s.panTarget.addScaledVector(new THREE.Vector3(0,1,0), dy * ps)
-      }
+    function applyDelta(dx,dy,s) {
+      if (s.isOrbiting) { s.theta-=dx*0.005; s.phi=Math.max(0.1,Math.min(Math.PI/2.1,s.phi-dy*0.005)) }
+      if (s.isPanning) { const r=new THREE.Vector3(); r.crossVectors(camera.getWorldDirection(new THREE.Vector3()),new THREE.Vector3(0,1,0)).normalize(); const ps=s.radius*0.001; s.panTarget.addScaledVector(r,-dx*ps); s.panTarget.addScaledVector(new THREE.Vector3(0,1,0),dy*ps) }
     }
 
-    el.addEventListener("mousedown",   onMouseDown)
-    window.addEventListener("mousemove",  onMouseMove)
-    window.addEventListener("mouseup",    onMouseUp)
-    el.addEventListener("wheel",       onWheel,      { passive: false })
-    el.addEventListener("contextmenu", preventCtx)
-    el.addEventListener("touchstart",  onTouchStart, { passive: false })
-    el.addEventListener("touchmove",   onTouchMove,  { passive: false })
-    el.addEventListener("touchend",    onTouchEnd)
+    el.addEventListener("mousedown",onMouseDown); window.addEventListener("mousemove",onMouseMove); window.addEventListener("mouseup",onMouseUp)
+    el.addEventListener("wheel",onWheel,{passive:false}); el.addEventListener("contextmenu",preventCtx)
+    el.addEventListener("touchstart",onTouchStart,{passive:false}); el.addEventListener("touchmove",onTouchMove,{passive:false}); el.addEventListener("touchend",onTouchEnd)
     return () => {
-      el.removeEventListener("mousedown",   onMouseDown)
-      window.removeEventListener("mousemove",  onMouseMove)
-      window.removeEventListener("mouseup",    onMouseUp)
-      el.removeEventListener("wheel",       onWheel)
-      el.removeEventListener("contextmenu", preventCtx)
-      el.removeEventListener("touchstart",  onTouchStart)
-      el.removeEventListener("touchmove",   onTouchMove)
-      el.removeEventListener("touchend",    onTouchEnd)
+      el.removeEventListener("mousedown",onMouseDown); window.removeEventListener("mousemove",onMouseMove); window.removeEventListener("mouseup",onMouseUp)
+      el.removeEventListener("wheel",onWheel); el.removeEventListener("contextmenu",preventCtx)
+      el.removeEventListener("touchstart",onTouchStart); el.removeEventListener("touchmove",onTouchMove); el.removeEventListener("touchend",onTouchEnd)
     }
   }, [enabled, gl, camera, lockedRef])
 
   useFrame(() => {
-    const s = state.current, locked = lockedRef.current
-    if (s.wasLocked && !locked) {
-      const offset = camera.position.clone().sub(s.target)
-      s.radius = offset.length()
-      s.phi    = Math.acos(Math.max(-1, Math.min(1, offset.y / s.radius)))
-      s.theta  = Math.atan2(offset.x, offset.z)
-      s.panTarget.copy(s.target)
-    }
-    s.wasLocked = locked
+    const s=state.current, locked=lockedRef.current
+    if (s.wasLocked&&!locked) { const o=camera.position.clone().sub(s.target); s.radius=o.length(); s.phi=Math.acos(Math.max(-1,Math.min(1,o.y/s.radius))); s.theta=Math.atan2(o.x,o.z); s.panTarget.copy(s.target) }
+    s.wasLocked=locked
     if (locked) return
-    s.target.lerp(s.panTarget, 0.08)
-    const x = s.target.x + s.radius * Math.sin(s.phi) * Math.sin(s.theta)
-    const y = s.target.y + s.radius * Math.cos(s.phi)
-    const z = s.target.z + s.radius * Math.sin(s.phi) * Math.cos(s.theta)
-    camera.position.set(x, y, z)
-    camera.lookAt(s.target)
+    s.target.lerp(s.panTarget,0.08)
+    const x=s.target.x+s.radius*Math.sin(s.phi)*Math.sin(s.theta)
+    const y=s.target.y+s.radius*Math.cos(s.phi)
+    const z=s.target.z+s.radius*Math.sin(s.phi)*Math.cos(s.theta)
+    camera.position.set(x,y,z); camera.lookAt(s.target)
   })
-
   return null
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Day / Night lighting
+// DayNightSystem — FIXED operator precedence + candle-aware lighting
+//
+// The previous bug: `(nightMode ? 1 : 0 - progress.current)` parsed as
+//   nightMode ? 1 : (0 - progress.current)  → wrong in day mode!
+// Fixed: `((nightMode ? 1 : 0) - progress.current)`
+//
+// Night mode philosophy:
+//   • Scene stays VISIBLE — ambient stays at 0.04 (not near-zero)
+//   • Directional light fades out completely
+//   • Candle point light becomes the SOLE warm source
+//   • Sky/fog go to deep dark blue-black (not pure black)
+//   • Tone mapping exposure drops to prevent bloom blowout
 // ─────────────────────────────────────────────────────────────────────────────
-function DayNightSystem({ debug, nightMode }) {
-  const { scene } = useThree()
-  const progress  = useRef(nightMode ? 1 : 0)
+function DayNightSystem({ debug, nightMode, season }) {
+  const { scene, gl } = useThree()
+  const progress = useRef(nightMode ? 1 : 0)
   const ambRef = useRef(), dirRef = useRef(), fillRef = useRef()
 
   useFrame(() => {
-    const speed  = debug?.nightTransitionSpeed ?? 0.03
-    const target = nightMode ? 1 : 0
-    progress.current += (target - progress.current) * speed * 3
-    const p = progress.current, invP = 1 - p
+    const speed = debug?.nightTransitionSpeed ?? 0.03
+    // ← FIXED: explicit parentheses around ternary
+    progress.current += ((nightMode ? 1 : 0) - progress.current) * speed * 3
+    progress.current = Math.max(0, Math.min(1, progress.current))
+    const p = progress.current, q = 1 - p
+
+    const ambR = debug?.seasonAmbR ?? (season?.ambR ?? 1.0)
+    const ambG = debug?.seasonAmbG ?? (season?.ambG ?? 0.88)
+    const ambB = debug?.seasonAmbB ?? (season?.ambB ?? 0.82)
 
     if (ambRef.current) {
-      ambRef.current.intensity = (debug?.ambientIntensity ?? 0.5) * invP + (debug?.nightAmbient ?? 0.015) * p
-      ambRef.current.color.setRGB(0.9*invP+0.05*p, 0.88*invP+0.05*p, 0.82*invP+0.08*p)
+      // Day: full ambient. Night: dim but NEVER zero (0.04) — room stays visible
+      const nightAmb = debug?.nightAmbient ?? 0.04
+      ambRef.current.intensity = (debug?.ambientIntensity ?? 0.5) * q + nightAmb * p
+      ambRef.current.color.setRGB(ambR*q + 0.08*p, ambG*q + 0.08*p, ambB*q + 0.15*p)
     }
     if (dirRef.current) {
-      dirRef.current.intensity = (debug?.directionalIntensity ?? 2.0) * invP * invP
-      dirRef.current.position.set(debug?.lightX??6, (debug?.lightY??10)*invP - 5*p, debug?.lightZ??6)
+      // Sun goes fully dark at night
+      dirRef.current.intensity = (debug?.directionalIntensity ?? 2.0) * q * q
+      dirRef.current.position.set(debug?.lightX??6, (debug?.lightY??10)*q - 10*p, debug?.lightZ??6)
       dirRef.current.color.setRGB(1.0, 0.88 - p*0.4, 0.7 - p*0.7)
     }
     if (fillRef.current) {
-      fillRef.current.intensity = (debug?.fillLight??0.2)*invP + (debug?.nightFillLight??0.02)*p
-      fillRef.current.color.setRGB(0.4+invP*0.2, 0.45+invP*0.15, 1.0)
+      // Fill also fades — candle takes over
+      fillRef.current.intensity = (debug?.fillLight??0.2)*q * 0.5
     }
+
+    // Sky background: day tints from season, night = deep blue-black (NOT pure black)
     scene.background = new THREE.Color().setRGB(
-      0.055*invP + 0.008*p, 0.055*invP + 0.006*p, 0.067*invP + 0.010*p,
+      Math.max(0.004, (season?.bgR??0.055)*q + 0.008*p),
+      Math.max(0.004, (season?.bgG??0.055)*q + 0.010*p),
+      Math.max(0.010, (season?.bgB??0.067)*q + 0.022*p),  // keep slight blue at night
     )
+
+    // Tone mapping exposure: lower at night to prevent candle overbloom
+    if (gl) gl.toneMappingExposure = 1.1 * q + 0.55 * p
   })
 
   return (
@@ -517,146 +444,110 @@ function DayNightSystem({ debug, nightMode }) {
   )
 }
 
-function SeamlessBackground({ nightMode }) {
+function SeamlessBackground({ nightMode, season, debug }) {
   const { scene } = useThree()
   const progress  = useRef(nightMode ? 1 : 0)
+
   useFrame(() => {
-    const target = nightMode ? 1 : 0
-    progress.current += (target - progress.current) * 0.04
+    // ← FIXED operator precedence here too
+    progress.current += ((nightMode ? 1 : 0) - progress.current) * 0.04
+    progress.current = Math.max(0, Math.min(1, progress.current))
     const p = progress.current
+    const fogR = debug?.seasonFogR ?? (season?.fogR ?? 0.04)
+    const fogG = debug?.seasonFogG ?? (season?.fogG ?? 0.04)
+    const fogB = debug?.seasonFogB ?? (season?.fogB ?? 0.05)
+    // Night fog: dark blue, not black
+    const nfR = season?.fogNightR ?? 0.006
+    const nfG = season?.fogNightG ?? 0.007
+    const nfB = season?.fogNightB ?? 0.018
+    const dens = debug?.seasonFogDensity ?? (season?.fogDensity ?? 0.038)
+
     scene.fog = new THREE.FogExp2(
-      new THREE.Color().setRGB(0.04*(1-p)+0.005*p, 0.04*(1-p)+0.004*p, 0.05*(1-p)+0.006*p),
-      0.038 + p * 0.018,
+      new THREE.Color().setRGB(
+        fogR*(1-p) + nfR*p,
+        fogG*(1-p) + nfG*p,
+        fogB*(1-p) + nfB*p,
+      ),
+      dens + p * 0.012,  // less fog increase at night to keep room visible
     )
   })
   return null
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// UI Buttons
+// SceneInner — has access to UITheme context
 // ─────────────────────────────────────────────────────────────────────────────
-function CozyButton({ label, active, onClick, icon, title }) {
-  const [hov, setHov] = useState(false)
-  return (
-    <button
-      onClick={onClick}
-      onMouseEnter={() => setHov(true)}
-      onMouseLeave={() => setHov(false)}
-      title={title}
-      style={{
-        background: active ? "#2a1f0e" : hov ? "#1a1208" : "#0f0905",
-        border: `2px solid ${active ? "#c9973a" : hov ? "#6b4c2a" : "#2e1f0e"}`,
-        borderRadius: 10, color: active ? "#e8c87a" : hov ? "#b8925a" : "#6b4c2a",
-        padding: "7px 16px", fontSize: 13, cursor: "pointer",
-        fontFamily: "'Caveat', cursive", fontWeight: 600, letterSpacing: "0.04em",
-        transition: "all 0.18s cubic-bezier(0.4,0,0.2,1)",
-        boxShadow: active ? "0 0 16px rgba(201,151,58,0.25)" : hov ? "0 2px 8px rgba(0,0,0,0.4)" : "none",
-        transform: hov && !active ? "translateY(-1px)" : "none",
-        display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap",
-      }}
-    >
-      {icon && <span style={{ fontSize: 14 }}>{icon}</span>}
-      {label}
-    </button>
-  )
-}
-
-// Camera presets
-const ANGLE_PRESETS = [
-  { label: "Side View", icon: "◢", pos: new THREE.Vector3(12, 5, 0),   target: new THREE.Vector3(0, 1.5, 0) },
-  { label: "Top View",  icon: "↓", pos: new THREE.Vector3(0, 18, 0.5), target: new THREE.Vector3(0, 0, 0)   },
-]
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Camera mode debug overlay
-// ─────────────────────────────────────────────────────────────────────────────
-function CameraModeOverlay({ mode }) {
-  const colors = { orbit:"#22d3ee", preset:"#c9973a", selected:"#a3e635", returning:"#e879f9" }
-  return (
-    <div style={{
-      position:"fixed", bottom:56, left:18, zIndex:30,
-      fontFamily:"'Caveat', cursive", fontSize:12,
-      background:"#0f0905", border:`1.5px solid ${colors[mode]??'#3d2a15'}`,
-      borderRadius:8, padding:"3px 10px",
-      color: colors[mode]??'#6b4c2a',
-      display:"flex", alignItems:"center", gap:6, opacity:0.85,
-      transition:"border-color 0.3s, color 0.3s",
-    }}>
-      <span style={{ width:6, height:6, borderRadius:"50%", background:colors[mode]??'#3d2a15', display:"inline-block", flexShrink:0 }}/>
-      cam: {mode}
-    </div>
-  )
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Main Scene
-// ─────────────────────────────────────────────────────────────────────────────
-export default function Scene({ selected, setSelected, hovered, setHovered, nightMode, onDarkModeToggle }) {
+function SceneInner({ selected, setSelected, hovered, setHovered, nightMode, onDarkModeToggle, sparkleEnabled }) {
   const debug = useDebugControls()
+  const { theme } = useUITheme()
+
   const [tooltipPos, setTooltipPos]     = useState(null)
   const [activePreset, setActivePreset] = useState(null)
   const [cameraMode, setCameraMode]     = useState("orbit")
-
   const cameraLockedRef = useRef(false)
 
-  const { start: startAudio, muted, toggleMute, skipMood, moodName, moodEmoji } = useAmbientAudio()
+  const { seasonKey, season, cycleSeason } = useSeasonalTheme()
+  const { start: startAudio, muted, toggleMute, volume, setVolume, skipMood, moodName, moodEmoji } = useAmbientAudio(debug)
 
   useEffect(() => {
     if (selected || activePreset !== null) cameraLockedRef.current = true
   }, [selected, activePreset])
 
-  const onCameraMode = useCallback((mode) => {
-    setCameraMode(mode)
-    cameraLockedRef.current = mode !== "orbit"
+  const onCameraMode = useCallback((m) => {
+    setCameraMode(m); cameraLockedRef.current = m !== "orbit"
   }, [])
 
   const handlePreset = (idx) => {
     const next = activePreset === idx ? null : idx
-    setActivePreset(next)
-    setSelected(null)
+    setActivePreset(next); setSelected(null)
   }
+
+  // Build bloom/vignette params — night uses reduced exposure so no overbloom
+  const bloomInt   = nightMode ? (debug?.nightBloomIntensity ?? 0.8)  : (debug?.bloomIntensity ?? 0.3)
+  const bloomThres = nightMode ? (debug?.nightBloomThreshold ?? 0.55) : (debug?.bloomThreshold ?? 0.8)
+  const vignette   = nightMode ? (debug?.nightVignette ?? 0.55)       : (debug?.vignetteStrength ?? 0.28)
 
   return (
     <>
-      <link href="https://fonts.googleapis.com/css2?family=Caveat:wght@400;600;700&display=swap" rel="stylesheet" />
-      <Leva collapsed={true} titleBar={{ title: "⚙ Debug" }} />
+      <link href="https://fonts.googleapis.com/css2?family=Caveat:wght@400;600;700&family=Lora:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet" />
+      <Leva collapsed={true} titleBar={{ title:"⚙ Debug" }} />
+
+      {/* Cursor sparkle — z above canvas */}
+      <CursorSparkle enabled={sparkleEnabled} debug={debug} />
+
+      {/* Weather — z:5, above canvas, below UI */}
+      <WeatherSystem seasonKey={seasonKey} nightMode={nightMode} debug={debug} />
+
       <Tooltip hovered={hovered} position={tooltipPos} />
 
       {/* ── Top-right controls ── */}
       <div style={{
         position:"fixed", top:18, right: selected ? 358 : 18, zIndex:30,
-        display:"flex", gap:8, alignItems:"center",
+        display:"flex", flexDirection:"row", gap:8, alignItems:"center",
         transition:"right 0.45s cubic-bezier(0.4,0,0.2,1)",
       }}>
-        {/* Music: mute toggle + skip button + mood name */}
-        <div style={{ display:"flex", gap:4, alignItems:"center" }}>
-          <CozyButton
-            icon={muted ? "🔇" : moodEmoji}
-            label={muted ? "Muted" : moodName}
-            active={!muted}
-            onClick={() => { startAudio(); toggleMute() }}
-            title={`Current mood: ${moodName}. Click to ${muted ? "unmute" : "mute"}`}
-          />
-          {/* Skip button — cycles to a random new mood instantly */}
-          <button
-            onClick={() => { startAudio(); skipMood() }}
-            title="Skip to next mood"
-            style={{
-              background:"#0f0905", border:"2px solid #2e1f0e",
-              borderRadius:10, color:"#6b4c2a", width:34, height:34,
-              cursor:"pointer", fontFamily:"'Caveat', cursive", fontSize:14,
-              display:"flex", alignItems:"center", justifyContent:"center",
-              transition:"all 0.18s", flexShrink:0,
-            }}
-            onMouseEnter={e => { e.currentTarget.style.borderColor="#6b4c2a"; e.currentTarget.style.color="#b8925a" }}
-            onMouseLeave={e => { e.currentTarget.style.borderColor="#2e1f0e"; e.currentTarget.style.color="#6b4c2a" }}
-          >⏭</button>
-        </div>
-
-        {ANGLE_PRESETS.map((p, i) => (
-          <CozyButton
-            key={i} label={p.label} icon={p.icon}
-            active={activePreset === i}
+        {/* UI theme cycle */}
+        <ThemeToggleButton />
+        {/* Season */}
+        <SeasonButton season={season} onClick={cycleSeason} />
+        {/* Volume */}
+        <VolumeSlider
+          volume={volume}
+          onVolumeChange={(v) => { startAudio(); setVolume(v) }}
+          muted={muted}
+          onMuteToggle={() => { startAudio(); toggleMute() }}
+          moodEmoji={moodEmoji}
+          moodName={moodName}
+          onSkip={() => { startAudio(); skipMood() }}
+          theme={theme}
+        />
+        {/* Camera presets */}
+        {[
+          { label:"Side View", icon:"◢", pos:new THREE.Vector3(12,5,0),   target:new THREE.Vector3(0,1.5,0) },
+          { label:"Top View",  icon:"↓", pos:new THREE.Vector3(0,18,0.5), target:new THREE.Vector3(0,0,0) },
+        ].map((p, i) => (
+          <ThemedButton key={i} label={p.label} icon={p.icon}
+            active={activePreset===i}
             onClick={() => handlePreset(i)}
             title={`Switch to ${p.label}`}
           />
@@ -667,32 +558,29 @@ export default function Scene({ selected, setSelected, hovered, setHovered, nigh
       {nightMode && (
         <div style={{
           position:"fixed", bottom:22, left:"50%", transform:"translateX(-50%)",
-          zIndex:30, background:"#0f0905", border:"2px solid #3d2a15",
+          zIndex:30,
+          background: theme.bg,
+          border: `2px solid ${theme.borderAct}`,
           borderRadius:24, padding:"7px 18px",
-          fontFamily:"'Caveat', cursive", fontSize:14, fontWeight:600,
-          color:"#c9973a", letterSpacing:"0.05em",
+          fontFamily: theme.font, fontSize:14, fontWeight:600,
+          color: theme.accent, letterSpacing:"0.05em",
           display:"flex", alignItems:"center", gap:8,
-          boxShadow:"0 0 20px rgba(201,151,58,0.15)",
+          boxShadow: `0 0 20px ${theme.glow}`,
           animation:"cozyFadeIn 0.4s ease",
         }}>
-          <span>🕯</span>
-          <span>Night mode — click the candle to return to day</span>
+          <span>🕯</span><span>Night mode — click the candle to return to day</span>
         </div>
       )}
 
       {/* ── Controls hint ── */}
       <div style={{
         position:"fixed", bottom:18, left:18, zIndex:30,
-        display:"flex", gap:10, alignItems:"center", opacity:0.55,
+        display:"flex", gap:8, alignItems:"center", opacity:0.6,
       }}>
-        {[
-          { icon:"🖱", label:"Drag to orbit" },
-          { icon:"✋", label:"Right-drag pan" },
-          { icon:"🔍", label:"Scroll / pinch zoom" },
-        ].map((h,i) => (
+        {[{icon:"🖱",label:"Drag to orbit"},{icon:"✋",label:"Pan"},{icon:"🔍",label:"Zoom"}].map((h,i) => (
           <div key={i} style={{
-            fontFamily:"'Caveat', cursive", fontSize:12, color:"#6b4c2a",
-            background:"#0f0905", border:"1.5px solid #2e1f0e",
+            fontFamily: theme.font, fontSize:12, color: theme.text,
+            background: theme.bg, border:`1.5px solid ${theme.border}`,
             borderRadius:8, padding:"3px 10px",
             display:"flex", alignItems:"center", gap:4,
           }}>
@@ -701,24 +589,35 @@ export default function Scene({ selected, setSelected, hovered, setHovered, nigh
         ))}
       </div>
 
-      <CameraModeOverlay mode={cameraMode} />
+      {/* Camera mode badge */}
+      <div style={{
+        position:"fixed", bottom:56, left:18, zIndex:30,
+        fontFamily: theme.font, fontSize:12,
+        background: theme.bg, border:`1.5px solid ${theme.border}`,
+        borderRadius:8, padding:"3px 10px",
+        color: theme.text,
+        display:"flex", alignItems:"center", gap:6, opacity:0.85,
+      }}>
+        <span style={{ width:6, height:6, borderRadius:"50%", background:theme.accent, display:"inline-block" }}/>
+        cam: {cameraMode}
+      </div>
 
       {/* ── Canvas ── */}
       <Canvas
-        shadows dpr={[1, 2]}
-        camera={{ position: [8, 5, 8], fov: debug?.fov ?? 45, near: 0.1, far: 100 }}
+        shadows dpr={[1,2]}
+        camera={{ position:[8,5,8], fov:debug?.fov??45, near:0.1, far:100 }}
         gl={{
-          antialias: true, powerPreference: "high-performance",
-          toneMapping: THREE.ACESFilmicToneMapping,
-          toneMappingExposure: 1.1,
-          outputColorSpace: THREE.SRGBColorSpace,
+          antialias:true, powerPreference:"high-performance",
+          toneMapping:THREE.ACESFilmicToneMapping,
+          toneMappingExposure: 1.1,   // DayNightSystem adjusts this per-frame
+          outputColorSpace:THREE.SRGBColorSpace,
         }}
         style={{ width:"100vw", height:"100vh" }}
-        onPointerMove={(e) => setTooltipPos({ x: e.clientX, y: e.clientY })}
+        onPointerMove={(e) => setTooltipPos({ x:e.clientX, y:e.clientY })}
         onClick={() => startAudio()}
       >
-        <DayNightSystem debug={debug} nightMode={nightMode} />
-        <SeamlessBackground nightMode={nightMode} />
+        <DayNightSystem debug={debug} nightMode={nightMode} season={season} />
+        <SeamlessBackground nightMode={nightMode} season={season} debug={debug} />
 
         <Suspense fallback={null}>
           <Model
@@ -726,30 +625,34 @@ export default function Scene({ selected, setSelected, hovered, setHovered, nigh
             selected={selected} setSelected={setSelected}
             debug={debug} onDarkModeToggle={onDarkModeToggle} nightMode={nightMode}
           />
+          <DustMotes nightMode={nightMode} debug={debug} />
           <Environment
             preset={nightMode ? "night" : "warehouse"} background={false}
-            intensity={nightMode ? (debug?.nightEnvIntensity ?? 0.04) : 1.0}
+            intensity={nightMode ? (debug?.nightEnvIntensity??0.02) : 0.9}
           />
         </Suspense>
 
         <CameraRig
           selected={selected} debug={debug}
-          presetTarget={activePreset !== null ? ANGLE_PRESETS[activePreset] : null}
+          presetTarget={activePreset!==null
+            ? [
+                { pos:new THREE.Vector3(12,5,0),   target:new THREE.Vector3(0,1.5,0) },
+                { pos:new THREE.Vector3(0,18,0.5), target:new THREE.Vector3(0,0,0) },
+              ][activePreset]
+            : null}
           cameraLockedRef={cameraLockedRef}
           onModeChange={onCameraMode}
         />
-        <CustomOrbitControls enabled={true} selected={selected} lockedRef={cameraLockedRef} />
+        <CustomOrbitControls enabled={true} lockedRef={cameraLockedRef} />
 
         <EffectComposer>
           <Bloom
-            intensity={nightMode ? (debug?.nightBloomIntensity ?? 1.2) : (debug?.bloomIntensity ?? 0.3)}
-            luminanceThreshold={nightMode ? (debug?.nightBloomThreshold ?? 0.3) : (debug?.bloomThreshold ?? 0.8)}
-            luminanceSmoothing={0.4} mipmapBlur={false}
+            intensity={bloomInt}
+            luminanceThreshold={bloomThres}
+            luminanceSmoothing={0.4}
+            mipmapBlur={false}
           />
-          <Vignette
-            offset={0.3}
-            darkness={nightMode ? (debug?.nightVignette ?? 0.6) : (debug?.vignetteStrength ?? 0.28)}
-          />
+          <Vignette offset={0.3} darkness={vignette} />
         </EffectComposer>
       </Canvas>
 
@@ -760,5 +663,16 @@ export default function Scene({ selected, setSelected, hovered, setHovered, nigh
         }
       `}</style>
     </>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Scene — wraps with UIThemeProvider
+// ─────────────────────────────────────────────────────────────────────────────
+export default function Scene(props) {
+  return (
+    <UIThemeProvider>
+      <SceneInner {...props} />
+    </UIThemeProvider>
   )
 }
