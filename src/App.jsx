@@ -4,16 +4,14 @@ import InfoPanel from "./scene/InfoPanel"
 import IntroScreen from "./scene/IntroScreen"
 
 export default function App() {
-  const [entered, setEntered] = useState(false)
-  const [selected, setSelected] = useState(null)
-  const [hovered, setHovered] = useState(null)
+  const [entered,   setEntered]   = useState(false)
+  const [selected,  setSelected]  = useState(null)
+  const [hovered,   setHovered]   = useState(null)
   const [nightMode, setNightMode] = useState(false)
-
   const toggleNightMode = () => setNightMode(n => !n)
 
   return (
     <>
-      {/* Scene loads in background during intro */}
       <div style={{
         opacity: entered ? 1 : 0,
         transition: "opacity 0.9s ease",
@@ -27,13 +25,13 @@ export default function App() {
           setHovered={setHovered}
           nightMode={nightMode}
           onDarkModeToggle={toggleNightMode}
+          sparkleEnabled={entered}
         />
         <InfoPanel
           selected={selected}
           onClose={() => setSelected(null)}
         />
       </div>
-
       {!entered && <IntroScreen onEnter={() => setEntered(true)} />}
     </>
   )
