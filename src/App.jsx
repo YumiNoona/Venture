@@ -3,11 +3,18 @@ import Scene from "./scene/Scene"
 import InfoPanel from "./scene/InfoPanel"
 import IntroScreen from "./scene/IntroScreen"
 
+// ── Auto night: if it's evening/night when user arrives, start in night mode
+function shouldAutoNight() {
+  const h = new Date().getHours()
+  return h >= 20 || h < 6
+}
+
 export default function App() {
   const [entered,   setEntered]   = useState(false)
   const [selected,  setSelected]  = useState(null)
   const [hovered,   setHovered]   = useState(null)
-  const [nightMode, setNightMode] = useState(false)
+  // ── FIX: initialise nightMode from time-of-day
+  const [nightMode, setNightMode] = useState(shouldAutoNight)
   const toggleNightMode = () => setNightMode(n => !n)
 
   return (

@@ -4,14 +4,26 @@ import { useFrame } from "@react-three/fiber"
 import * as THREE from "three"
 import { INTERACTIVE_NAMES, OBJECT_META } from "../constants/objectMeta"
 
+// ── FIX: WeakMap cache so traverse only happens once per object, not per frame
+const _nameCache = new WeakMap()
 function findInteractiveName(obj) {
+  if (_nameCache.has(obj)) return _nameCache.get(obj)
   let cur = obj
   while (cur) {
-    if (INTERACTIVE_NAMES.includes(cur.name)) return cur.name
+    if (INTERACTIVE_NAMES.includes(cur.name)) {
+      _nameCache.set(obj, cur.name)
+      return cur.name
+    }
     cur = cur.parent
   }
+  _nameCache.set(obj, null)
   return null
 }
+
+// ── Reusable decompose vectors — no allocation per frame
+const _decompP = new THREE.Vector3()
+const _decompQ = new THREE.Quaternion()
+const _decompS = new THREE.Vector3()
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Sound Engine
@@ -71,20 +83,14 @@ class SoundEngine {
     })
   }
 
-  // ── Piano: plays a short pentatonic melody ────────────────────────────────
   playPianoMelody() {
     this._play((ctx) => {
-      // A minor pentatonic: A4=440, C5=523, D5=587, E5=659, G5=784, A5=880
       const notes = [440, 523.25, 587.33, 659.25, 587.33, 523.25, 659.25, 880]
       const times =  [0,  0.18,   0.36,   0.52,   0.70,   0.86,   1.02,  1.18]
       notes.forEach((freq, i) => {
         const t0 = ctx.currentTime + times[i]
-        // Main tone: triangle (piano-like)
-        const osc  = ctx.createOscillator()
-        const gain = ctx.createGain()
-        // Add harmonics with a secondary oscillator
-        const osc2  = ctx.createOscillator()
-        const gain2 = ctx.createGain()
+        const osc  = ctx.createOscillator(), gain = ctx.createGain()
+        const osc2 = ctx.createOscillator(), gain2 = ctx.createGain()
         osc.type  = "triangle"; osc.frequency.value  = freq
         osc2.type = "sine";     osc2.frequency.value = freq * 2.01
         osc.connect(gain);  gain.connect(ctx.destination)
@@ -101,7 +107,6 @@ class SoundEngine {
     })
   }
 
-  // ── Hat: magic shimmer on click ───────────────────────────────────────────
   playMagic() {
     this._play((ctx) => {
       [523.25, 659.25, 783.99, 1046.5].forEach((f, i) => {
@@ -120,10 +125,13 @@ class SoundEngine {
 const soundEngine = new SoundEngine()
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Outline — respects noOutline flag in meta
+// Outline — cached traverse + reused decompose vectors
 // ─────────────────────────────────────────────────────────────────────────────
 function LiveOutline({ targetRef, debug, objectName }) {
-  const meshRef = useRef()
+  const meshRef    = useRef()
+  const srcCache   = useRef(null)  // ← FIX: cache first-found mesh, not traverse every frame
+  const prevTarget = useRef(null)
+
   const objColor = objectName ? OBJECT_META[objectName]?.outlineColor : null
   const color = objColor ?? debug?.outlineColor ?? "#ffffff"
   const mat = useMemo(() => new THREE.MeshBasicMaterial({
@@ -135,14 +143,26 @@ function LiveOutline({ targetRef, debug, objectName }) {
   useFrame(({ clock }) => {
     const m = meshRef.current, node = targetRef.current
     if (!m || !node) return
-    let src = null
-    if (node.isMesh && node.geometry) src = node
-    else node.traverse(c => { if (!src && c.isMesh && c.geometry) src = c })
+
+    // ── FIX: only traverse when target changes; cache result
+    if (prevTarget.current !== node) {
+      srcCache.current = null
+      if (node.isMesh && node.geometry) {
+        srcCache.current = node
+      } else {
+        node.traverse(c => { if (!srcCache.current && c.isMesh && c.geometry) srcCache.current = c })
+      }
+      prevTarget.current = node
+    }
+    const src = srcCache.current
     if (!src) return
+
     m.geometry = src.geometry
     src.updateWorldMatrix(true, false)
-    const p = new THREE.Vector3(), q = new THREE.Quaternion(), s = new THREE.Vector3()
-    src.matrixWorld.decompose(p, q, s)
+
+    // ── FIX: reuse _decompP/Q/S — no allocation per frame
+    src.matrixWorld.decompose(_decompP, _decompQ, _decompS)
+
     const t = clock.getElapsedTime()
     const style = debug?.outlineStyle ?? "pulse"
     let extra = 1.05
@@ -151,30 +171,44 @@ function LiveOutline({ targetRef, debug, objectName }) {
     else if (style === "breathe") extra = 1.05 + (Math.sin(t*1.4)*0.5+0.5)*0.055
     else if (style === "jitter")  extra = 1.05 + (Math.random()-0.5)*0.02
     else extra = 1.06
-    s.multiplyScalar(extra * (debug?.outlineWidth ?? 1.0))
-    m.matrix.compose(p, q, s); m.matrixWorldNeedsUpdate = true
+
+    _decompS.multiplyScalar(extra * (debug?.outlineWidth ?? 1.0))
+    m.matrix.compose(_decompP, _decompQ, _decompS)
+    m.matrixWorldNeedsUpdate = true
   })
   return <mesh ref={meshRef} matrixAutoUpdate={false} material={mat} renderOrder={999} />
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Mirror glint
+// Mirror glint — also cached traverse
 // ─────────────────────────────────────────────────────────────────────────────
 function GlintEffect({ targetRef, activeRef, debug }) {
-  const meshRef = useRef(), progress = useRef(0)
+  const meshRef    = useRef(), progress = useRef(0)
+  const srcCache   = useRef(null)
+  const prevTarget = useRef(null)
   const mat = useMemo(() => new THREE.MeshBasicMaterial({
     color: new THREE.Color("#ffffff"), transparent: true, opacity: 0,
     depthWrite: false, blending: THREE.AdditiveBlending,
   }), [])
+
   useFrame((_, dt) => {
     const m = meshRef.current, node = targetRef.current
     if (!m || !node) return
-    let src = null
-    if (node.isMesh && node.geometry) src = node
-    else node.traverse(c => { if (!src && c.isMesh && c.geometry) src = c })
+
+    if (prevTarget.current !== node) {
+      srcCache.current = null
+      if (node.isMesh && node.geometry) srcCache.current = node
+      else node.traverse(c => { if (!srcCache.current && c.isMesh && c.geometry) srcCache.current = c })
+      prevTarget.current = node
+    }
+    const src = srcCache.current
     if (!src) return
-    m.geometry = src.geometry; src.updateWorldMatrix(true, false)
-    m.matrix.copy(src.matrixWorld); m.matrixWorldNeedsUpdate = true
+
+    m.geometry = src.geometry
+    src.updateWorldMatrix(true, false)
+    m.matrix.copy(src.matrixWorld)
+    m.matrixWorldNeedsUpdate = true
+
     const active = activeRef.current
     if (active) progress.current = Math.min(progress.current + dt / (debug?.glintDuration ?? 0.6) * 2, 1)
     else         progress.current = Math.max(progress.current - dt * 3, 0)
@@ -205,7 +239,6 @@ export default function Model({ hovered, setHovered, selected, setSelected, debu
   const candleLightRef  = useRef()
   const candlePos       = useRef([0, 1.5, 0])
 
-  // Debounce hover spam
   const lastHoverName     = useRef(null)
   const hoverStableTimer  = useRef(null)
   const HOVER_DEBOUNCE_MS = 80
@@ -225,11 +258,8 @@ export default function Model({ hovered, setHovered, selected, setSelected, debu
           flightOffset: Math.random() * Math.PI * 2,
           baseY: child.position.y, baseX: child.position.x, baseZ: child.position.z,
           glintActive: false,
-          // Piano state
           pianoNoteTimer: 0, pianoPlaying: false,
-          // Hat state
           hatMagicTimer: 0, hatMagicActive: false,
-          // Candle state
           candleFlameScale: 1,
         }
         if (child.name.startsWith("Bird"))
@@ -249,11 +279,9 @@ export default function Model({ hovered, setHovered, selected, setSelected, debu
   useFrame(({ clock }, dt) => {
     const t = clock.getElapsedTime()
 
-    // ── Candle light flicker ─────────────────────────────────────────────────
     if (candleLightRef.current) {
       const n = Math.sin(t*7.3)*0.4 + Math.sin(t*13.1)*0.3 + Math.sin(t*3.7)*0.3
       const base = debug?.candleLightIntensity ?? 4.5
-      // Only glow in night mode; intensity 0 in day
       candleLightRef.current.intensity = nightMode
         ? (base + n * (debug?.candleFlicker ?? 0.6)) * 1.0
         : 0
@@ -267,7 +295,6 @@ export default function Model({ hovered, setHovered, selected, setSelected, debu
       if (!meta) return
 
       switch (meta.interaction) {
-
         case "rotate": {
           const axis = debug?.globeAxis ?? "Y"
           const tgt  = s.hovered ? (debug?.globeSpeed ?? 1.5) : 0
@@ -280,7 +307,6 @@ export default function Model({ hovered, setHovered, selected, setSelected, debu
           node.scale.setScalar(s.scaleVal)
           break
         }
-
         case "wobble": {
           if (s.hovered && s.wobble < 0.12) s.wobble = 0.18
           if (s.wobble > 0.001) {
@@ -295,24 +321,17 @@ export default function Model({ hovered, setHovered, selected, setSelected, debu
           node.scale.setScalar(s.scaleVal)
           break
         }
-
         case "shrink": {
-          // Subtle compress — not extreme
           const scaleTarget = s.hovered ? 0.88 : 1.0
           s.scaleVel += (scaleTarget-s.scaleVal)*dt*10; s.scaleVel*=0.75; s.scaleVal+=s.scaleVel
           node.scale.setScalar(s.scaleVal)
           break
         }
-
-        // ── Piano: keys press down on hover, plays melody on click ────────────
         case "press": {
           s.pressY += ((s.hovered ? -0.045 : 0) - s.pressY) * dt * 22
           node.position.y = s.baseY + s.pressY
-
-          // After click triggered pianoPlaying: animate a bounce
           if (s.pianoPlaying) {
             s.pianoNoteTimer += dt
-            // Small bounce scale to show "playing" state
             const bounce = Math.sin(s.pianoNoteTimer * 18) * Math.exp(-s.pianoNoteTimer * 3) * 0.035
             node.scale.setScalar(1 + bounce)
             if (s.pianoNoteTimer > 1.5) { s.pianoPlaying = false; s.pianoNoteTimer = 0 }
@@ -323,7 +342,6 @@ export default function Model({ hovered, setHovered, selected, setSelected, debu
           }
           break
         }
-
         case "float": {
           const idx  = parseInt(name.replace("Bird","")) - 1
           const base = birdBases.current[name] ?? {x:0,y:2,z:0}
@@ -338,29 +356,20 @@ export default function Model({ hovered, setHovered, selected, setSelected, debu
           node.rotation.x  = Math.sin(t*0.4*spd+s.flightOffset)*0.1
           break
         }
-
-        // ── Candle: flame flicker in both modes, bright in night mode ─────────
         case "darkmode": {
           const noise = Math.sin(t*7)*0.4 + Math.sin(t*13)*0.3 + Math.sin(t*3.7)*0.3
-          // Always flicker a little — much more in night mode
           const intensity = nightMode ? 1.0 : (s.hovered ? 0.5 : 0.15)
-          // Gentle hover glow in day mode; full dance in night mode
           s.scaleVal += ((1 + noise*0.03*intensity) - s.scaleVal)*dt*15
           node.scale.setScalar(s.scaleVal)
           node.rotation.z = noise*0.015*intensity
-          // No outline — controlled via noOutline flag in meta
           break
         }
-
-        // ── Hat: tilt on hover, magic bounce on click ─────────────────────────
         case "tilt": {
           s.tiltVel += ((s.hovered ? -0.38 : 0) - s.tiltAngle)*dt*18
           s.tiltVel *= 0.72; s.tiltAngle += s.tiltVel
           node.rotation.z = s.tiltAngle
-
           if (s.hatMagicActive) {
             s.hatMagicTimer += dt
-            // Pop up, spin, settle
             const pop   = Math.sin(s.hatMagicTimer * 10) * Math.exp(-s.hatMagicTimer * 4) * 0.12
             const spin  = Math.sin(s.hatMagicTimer * 20) * Math.exp(-s.hatMagicTimer * 3) * 0.3
             node.scale.setScalar(1 + pop)
@@ -373,7 +382,6 @@ export default function Model({ hovered, setHovered, selected, setSelected, debu
           }
           break
         }
-
         case "glint": {
           mirrorGlintActiveRef.current = s.hovered
           const shim = s.hovered ? Math.sin(t*9)*0.02 : Math.sin(t*2)*0.005
@@ -382,7 +390,6 @@ export default function Model({ hovered, setHovered, selected, setSelected, debu
           node.scale.set(s.scaleVal+shim, s.scaleVal-shim*0.5, s.scaleVal+shim*0.3)
           break
         }
-
         case "peck": {
           const peckSpd = debug?.pigeonPeckSpeed ?? 6
           const peckAng = debug?.pigeonPeckAngle ?? 0.12
@@ -402,30 +409,24 @@ export default function Model({ hovered, setHovered, selected, setSelected, debu
     })
   })
 
-  // ── Debounced hover ───────────────────────────────────────────────────────
   const handlePointerMove = (e) => {
     const name = findInteractiveName(e.object)
-
     if (name) {
       e.stopPropagation()
       if (activeNameRef.current === name) return
-
       if (hoverStableTimer.current) clearTimeout(hoverStableTimer.current)
       lastHoverName.current = name
-
       hoverStableTimer.current = setTimeout(() => {
         const stableName = lastHoverName.current
         if (!stableName) return
         if (activeNameRef.current && activeNameRef.current !== stableName)
           states.current[activeNameRef.current].hovered = false
-
         activeNameRef.current  = stableName
         activeRef.current      = nodeMap.current[stableName] ?? null
         states.current[stableName].hovered = true
         setActiveNameState(stableName)
         setHovered({ name: stableName, obj: nodeMap.current[stableName] })
         document.body.style.cursor = "pointer"
-
         const meta = OBJECT_META[stableName]
         if (meta) soundEngine.hover(meta.interaction)
       }, HOVER_DEBOUNCE_MS)
@@ -455,7 +456,6 @@ export default function Model({ hovered, setHovered, selected, setSelected, debu
     e.stopPropagation()
     const s    = states.current[name]
     const meta = OBJECT_META[name]
-
     if (meta?.interaction === "wobble") {
       soundEngine.click("wobble")
       s.wobble = debug?.bottleClickWobble ?? 0.38
@@ -464,24 +464,19 @@ export default function Model({ hovered, setHovered, selected, setSelected, debu
       soundEngine.click("darkmode")
       onDarkModeToggle?.()
     } else if (meta?.interaction === "press") {
-      // Piano: play a melody
       soundEngine.playPianoMelody()
       s.pianoPlaying  = true
       s.pianoNoteTimer = 0
     } else if (meta?.interaction === "tilt") {
-      // Hat: magic sparkle
       soundEngine.playMagic()
       s.hatMagicActive = true
       s.hatMagicTimer  = 0
     } else {
       soundEngine.click(meta?.interaction ?? "default")
     }
-
     setSelected({ name, obj: nodeMap.current[name] })
   }
 
-  // Determine if we should show outline for hovered object
-  // Candle has noOutline = true in its meta → skip outline entirely
   const showOutline = activeRef.current && activeNameState
     && !OBJECT_META[activeNameState]?.noOutline
 
@@ -493,7 +488,6 @@ export default function Model({ hovered, setHovered, selected, setSelected, debu
         onPointerOut={handlePointerOut}
         onClick={handleClick}
       />
-      {/* Candle point light — warm amber, only glows in night mode */}
       <pointLight
         ref={candleLightRef}
         position={candlePos.current}
