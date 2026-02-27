@@ -43,6 +43,10 @@ export default function CursorSparkle({ enabled = true, debug = {} }) {
   const rafRef    = useRef(null)
   const lastEmit  = useRef(0)
 
+  // ── FIX: keep debug in a ref so the RAF loop always sees the latest values
+  const debugRef  = useRef(debug)
+  useEffect(() => { debugRef.current = debug }, [debug])
+
   useEffect(() => {
     if (!enabled) return
     const canvas = canvasRef.current
@@ -63,16 +67,17 @@ export default function CursorSparkle({ enabled = true, debug = {} }) {
 
       ctx.clearRect(0, 0, canvas.width, canvas.height)
 
-      // ── Emit along movement vector (interpolated) ─────────────────────────
+      // ── FIX: read from debugRef so we always have fresh values
+      const d = debugRef.current
       const cfg = {
-        density:   debug?.sparkDensity   ?? 2,
-        speed:     debug?.sparkSpeed     ?? 1.0,
-        sizeScale: debug?.sparkSize      ?? 1.0,
-        lifetime:  debug?.sparkLifetime  ?? 1.0,
-        gravity:   debug?.sparkGravity   ?? 1.0,
-        glow:      debug?.sparkGlow      !== false,
-        emitRate:  debug?.sparkEmitRate  ?? 20,
-        minMove:   debug?.sparkMinMove   ?? 2,
+        density:   d?.sparkDensity   ?? 2,
+        speed:     d?.sparkSpeed     ?? 1.0,
+        sizeScale: d?.sparkSize      ?? 1.0,
+        lifetime:  d?.sparkLifetime  ?? 1.0,
+        gravity:   d?.sparkGravity   ?? 1.0,
+        glow:      d?.sparkGlow      !== false,
+        emitRate:  d?.sparkEmitRate  ?? 20,
+        minMove:   d?.sparkMinMove   ?? 2,
       }
 
       const { x: mx, y: my } = mouse.current
@@ -93,7 +98,6 @@ export default function CursorSparkle({ enabled = true, debug = {} }) {
       }
       prev.current = { x: mx, y: my }
 
-      // ── Update + draw ─────────────────────────────────────────────────────
       particles.current = particles.current.filter(p => p.life > 0.01)
 
       for (const p of particles.current) {
@@ -105,7 +109,7 @@ export default function CursorSparkle({ enabled = true, debug = {} }) {
         p.rotation += p.rotSpeed * dt
         if (p.life <= 0) continue
 
-        const alpha = p.life * p.life   // quadratic — snappy tail
+        const alpha = p.life * p.life
         const r     = p.size * (0.2 + p.life * 0.8)
 
         ctx.save()
@@ -114,7 +118,7 @@ export default function CursorSparkle({ enabled = true, debug = {} }) {
         ctx.translate(p.x, p.y)
         ctx.rotate(p.rotation)
 
-        if (debug?.sparkGlow !== false) {
+        if (cfg.glow) {
           ctx.shadowBlur  = r * 2.8
           ctx.shadowColor = p.color
         }
@@ -142,7 +146,7 @@ export default function CursorSparkle({ enabled = true, debug = {} }) {
       window.removeEventListener("mousemove", onMove)
       window.removeEventListener("resize", resize)
     }
-  }, [enabled]) // re-runs on enable change; cfg is read each frame via closure
+  }, [enabled])
 
   if (!enabled) return null
   return (

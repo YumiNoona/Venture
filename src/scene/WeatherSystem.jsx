@@ -1,14 +1,5 @@
 import { useEffect, useRef } from "react"
 
-// ─────────────────────────────────────────────────────────────────────────────
-// WeatherSystem — 2D canvas overlay particle weather
-// Season determines weather type:
-//   autumn → falling leaves / golden embers
-//   winter → snow
-//   spring → cherry blossom petals
-// nightMode → intensifies, adds slight wind
-// ─────────────────────────────────────────────────────────────────────────────
-
 const WEATHER_CFG = {
   autumn: {
     count:     55,
@@ -56,17 +47,14 @@ function makeParticle(W, H, cfg, initial = false) {
     wobFreq: 0.4 + Math.random() * 0.4,
     wobAmp:  cfg.wobble * (0.5 + Math.random() * 0.8),
     opacity: 0.4 + Math.random() * 0.6,
-    life:    1.0,
   }
 }
 
-// Draw snowflake (6-point crystal)
 function drawSnow(ctx, r) {
   for (let i = 0; i < 6; i++) {
     const a = (i / 6) * Math.PI * 2
     ctx.moveTo(0, 0)
     ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r)
-    // tiny crossbars
     const mx = Math.cos(a) * r * 0.5, my = Math.sin(a) * r * 0.5
     const perp = a + Math.PI / 2
     ctx.moveTo(mx + Math.cos(perp) * r * 0.22, my + Math.sin(perp) * r * 0.22)
@@ -74,7 +62,6 @@ function drawSnow(ctx, r) {
   }
 }
 
-// Draw leaf (oval with stem)
 function drawLeaf(ctx, r) {
   ctx.beginPath()
   ctx.ellipse(0, 0, r * 0.5, r, 0, 0, Math.PI * 2)
@@ -85,7 +72,6 @@ function drawLeaf(ctx, r) {
   ctx.stroke()
 }
 
-// Draw petal (tear-drop)
 function drawPetal(ctx, r) {
   ctx.beginPath()
   ctx.moveTo(0, -r)
@@ -101,6 +87,10 @@ export default function WeatherSystem({ seasonKey, nightMode, debug = {} }) {
   const rafRef     = useRef(null)
   const timeRef    = useRef(0)
 
+  // ── FIX: nightMode in a ref so it can be read per-frame without triggering re-init
+  const nightModeRef = useRef(nightMode)
+  useEffect(() => { nightModeRef.current = nightMode }, [nightMode])
+
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
@@ -113,9 +103,9 @@ export default function WeatherSystem({ seasonKey, nightMode, debug = {} }) {
     resize()
     window.addEventListener("resize", resize)
 
-    const cfg    = WEATHER_CFG[seasonKey] ?? WEATHER_CFG.autumn
-    const count  = debug?.weatherCount ?? cfg.count
-    const wind   = debug?.weatherWind  ?? cfg.wind
+    const cfg   = WEATHER_CFG[seasonKey] ?? WEATHER_CFG.autumn
+    const count = debug?.weatherCount || cfg.count
+    const wind  = debug?.weatherWind  || cfg.wind
 
     // Seed initial particles spread across viewport
     particles.current = Array.from({ length: count }, () =>
@@ -125,29 +115,28 @@ export default function WeatherSystem({ seasonKey, nightMode, debug = {} }) {
     let lastTime = performance.now()
 
     const loop = (now) => {
-      const dt      = Math.min((now - lastTime) / 16.67, 2.5)
+      const dt = Math.min((now - lastTime) / 16.67, 2.5)
       lastTime = now
       timeRef.current += dt * 0.016
 
       const W = canvas.width, H = canvas.height
       ctx.clearRect(0, 0, W, H)
 
-      const windStrength = wind * (nightMode ? 1.4 : 1.0)
-      const nightBonus   = nightMode ? 1.2 : 1.0
+      // ── FIX: read nightMode from ref — no stale closure
+      const isNight     = nightModeRef.current
+      const windStrength = wind * (isNight ? 1.4 : 1.0)
+      const nightBonus   = isNight ? 1.2 : 1.0
 
-      // Respawn dead particles
       while (particles.current.length < count) {
         particles.current.push(makeParticle(W, H, cfg, false))
       }
 
       for (const p of particles.current) {
-        // Physics
         const wobble = Math.sin(timeRef.current * p.wobFreq * 60 + p.phase) * p.wobAmp
         p.x  += (p.vx + wobble * 0.05 + windStrength * 0.4) * dt
         p.y  += p.vy * nightBonus * dt
         p.rot += p.rotSpd * dt
 
-        // Wrap / respawn
         if (p.y > H + 30) {
           p.x = Math.random() * W
           p.y = -20
@@ -156,7 +145,6 @@ export default function WeatherSystem({ seasonKey, nightMode, debug = {} }) {
         if (p.x > W + 50) p.x = -20
         if (p.x < -50) p.x = W + 20
 
-        // Fade-in near top, fade-out near bottom
         const fadeIn  = Math.min(p.y / 80, 1)
         const fadeOut = Math.max(0, 1 - Math.max(0, p.y - (H - 60)) / 60)
         const alpha   = p.opacity * fadeIn * fadeOut * cfg.opacity
@@ -175,7 +163,6 @@ export default function WeatherSystem({ seasonKey, nightMode, debug = {} }) {
           ctx.beginPath()
           drawSnow(ctx, p.size)
           ctx.stroke()
-          // Center dot
           ctx.beginPath()
           ctx.arc(0, 0, p.size * 0.2, 0, Math.PI * 2)
           ctx.fill()
@@ -184,7 +171,6 @@ export default function WeatherSystem({ seasonKey, nightMode, debug = {} }) {
           ctx.shadowColor = p.color
           drawLeaf(ctx, p.size)
         } else {
-          // petal
           ctx.shadowBlur  = 3
           ctx.shadowColor = p.color
           drawPetal(ctx, p.size)
@@ -202,8 +188,8 @@ export default function WeatherSystem({ seasonKey, nightMode, debug = {} }) {
       cancelAnimationFrame(rafRef.current)
       window.removeEventListener("resize", resize)
     }
-  // Re-init when season or nightMode changes
-  }, [seasonKey, nightMode, debug?.weatherCount, debug?.weatherWind])
+  // ── FIX: nightMode removed from deps — no more full teardown on toggle
+  }, [seasonKey, debug?.weatherCount, debug?.weatherWind])
 
   return (
     <canvas
@@ -212,7 +198,7 @@ export default function WeatherSystem({ seasonKey, nightMode, debug = {} }) {
         position: "fixed",
         inset: 0,
         pointerEvents: "none",
-        zIndex: 5,     // above 3D canvas, below UI
+        zIndex: 5,
         opacity: debug?.weatherOpacity ?? 1,
       }}
     />

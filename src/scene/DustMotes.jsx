@@ -2,6 +2,10 @@ import { useMemo, useRef } from "react"
 import { useFrame } from "@react-three/fiber"
 import * as THREE from "three"
 
+// ── FIX: Hoist Color objects outside useFrame — no more per-frame allocations
+const COLOR_NIGHT = new THREE.Color("#e8a050")
+const COLOR_DAY   = new THREE.Color("#d4b896")
+
 export default function DustMotes({ nightMode, debug = {} }) {
   const meshRef = useRef()
 
@@ -69,12 +73,11 @@ export default function DustMotes({ nightMode, debug = {} }) {
       const baseOpacity = nightMode
         ? (debug?.dustNightOpacity ?? 0.70)
         : (debug?.dustDayOpacity   ?? 0.40)
-      const targetColor = nightMode
-        ? new THREE.Color("#e8a050")
-        : new THREE.Color("#d4b896")
+
+      // ── FIX: reuse hoisted Color objects — no allocation
       material.size    += (baseSize    - material.size)    * 0.05
       material.opacity += (baseOpacity - material.opacity) * 0.04
-      material.color.lerp(targetColor, 0.03)
+      material.color.lerp(nightMode ? COLOR_NIGHT : COLOR_DAY, 0.03)
       material.needsUpdate = true
     }
   })
