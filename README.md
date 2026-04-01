@@ -11,12 +11,11 @@ A professional-grade 3D engine to visualize, customize, and deploy interactive W
 
 ![React](https://img.shields.io/badge/React-18-61DAFB?style=flat-square&logo=react)
 ![Three.js](https://img.shields.io/badge/Three.js-r160-000000?style=flat-square&logo=three.js)
-![Vite](https://img.shields.io/badge/Vite-5-646CFF?style=flat-square&logo=vite)
 ![Next.js](https://img.shields.io/badge/Next.js-14-000000?style=flat-square&logo=next.js)
 ![Turborepo](https://img.shields.io/badge/Turborepo-Monorepo-EF4444?style=flat-square&logo=turborepo)
 ![Supabase](https://img.shields.io/badge/Supabase-Backend-3ECF8E?style=flat-square&logo=supabase)
 ![Stripe](https://img.shields.io/badge/Stripe-Payments-635BFF?style=flat-square&logo=stripe)
-![Tailwind](https://img.shields.io/badge/TailwindCSS-4-06B6D4?style=flat-square&logo=tailwindcss)
+![Tailwind](https://img.shields.io/badge/TailwindCSS-3-06B6D4?style=flat-square&logo=tailwindcss)
 
 </div>
 
@@ -24,11 +23,11 @@ A professional-grade 3D engine to visualize, customize, and deploy interactive W
 
 ## 📖 Summary
 
-**Venture** is a multi-tenant, config-driven 3D SaaS platform designed for creators, designers, and agencies to easily manage and publish interactive 3D portfolios. Available through a powerful **Dashboard Editor** and a high-performance **Next.js Public Viewer**.
+**Venture** is a multi-tenant, config-driven 3D SaaS platform designed for creators, designers, and agencies to easily manage and publish interactive 3D portfolios. Available through a unified **Next.js 14 Dashboard** with integrated auth, project editing, and a high-performance **Public Viewer**.
 
-Unlike traditional hardcoded 3D experiences, Venture implements a **Frozen Engine Contract**, ensuring the rendering core accepts a versioned JSON configuration. This empowers users to upload custom `.glb` models, define interactive behaviors (like wobbly animations, specific highlights, and audio triggers), and tweak lighting and themes without any coding.
+Unlike traditional hardcoded 3D experiences, Venture implements a **Frozen Engine Contract**, ensuring the rendering core accepts a versioned JSON configuration. This empowers users to upload custom `.glb` models, define interactive behaviors (like wobbly animations, highlights, and audio triggers), and tweak lighting and themes — all without writing code.
 
-Backed by a Turborepo architecture sharing the core `Engine` package between the editing suite and the highly optimized public edge viewer.
+Backed by a Turborepo monorepo sharing the core `Engine` package between the editing suite and the highly optimized public edge viewer.
 
 ---
 
@@ -45,14 +44,14 @@ Backed by a Turborepo architecture sharing the core `Engine` package between the
 ### 🛠 Architecture & Management
 | Feature | Description |
 |---|---|
-| **Turborepo Monorepo** | Segmented architecture (`apps/dashboard`, `apps/viewer`, `packages/engine`, `packages/ui`). |
+| **Turborepo Monorepo** | Segmented architecture (`apps/web`, `apps/viewer`, `packages/engine`, `packages/ui`). |
 | **Dynamic Config Versioning** | Built-in continuous migration layer ensures old user configs are upgraded dynamically. |
 | **Live Inline Preview** | Real-time WebGL rendering inside the Dashboard while managing the scene logic. |
 
 ### 🔐 Platform Capabilities
 | Feature | Description |
 |---|---|
-| **Supabase Architecture** | Secure cloud configuration persistence with `users` and `projects` tables. |
+| **Supabase SSR Auth** | Passwordless email OTP login with server/browser client split and middleware protection. |
 | **Tiered Pricing Model** | Plan-gated engine features via Stripe webhooks restricting usage for free users. |
 | **High Performance** | Instanced mesh optimizations, hoisted material references, and memory-safe physics loops. |
 
@@ -63,24 +62,25 @@ Backed by a Turborepo architecture sharing the core `Engine` package between the
 ```mermaid
 graph TB
     subgraph Client["Client Applications"]
-        DASHBOARD["🛠️ Vite Dashboard<br/><small>Project Manager & Editor</small>"]
+        WEB["🛠️ Next.js Dashboard<br/><small>Auth + Project Editor + Billing</small>"]
         VIEWER["🌐 Next.js Viewer<br/><small>Public Edge Render</small>"]
     end
 
     subgraph Core["Packages"]
         ENGINE["🎮 Engine Package<br/><small>React Three Fiber Runtime</small>"]
-        UI["🎨 UI Package<br/><small>Shared Theme & Tokens</small>"]
+        UI["🎨 UI Package<br/><small>Shadcn Components + Tokens</small>"]
+        UTILS["🔧 Utils Package<br/><small>Config Migration + Helpers</small>"]
     end
 
     subgraph Backend["Supabase Backend"]
-        AUTH["🔑 Supabase Auth<br/><small>JWT & User Identity</small>"]
+        AUTH["🔑 Supabase Auth<br/><small>OTP + JWT Sessions</small>"]
         DB["🗄️ Postgres Database<br/><small>Configs & Subscriptions</small>"]
         STORAGE["📦 Supabase Storage<br/><small>GLB Models</small>"]
     end
 
-    DASHBOARD -->|"Live Preview"| ENGINE
+    WEB -->|"Live Preview"| ENGINE
     VIEWER -->|"Production Target"| ENGINE
-    DASHBOARD <-->|"Sync & Upload"| Backend
+    WEB <-->|"Sync & Upload"| Backend
     VIEWER -->|"Fetch Config"| DB
     VIEWER -->|"Stream Asset"| STORAGE
     ENGINE -->|"Design Rules"| UI
@@ -94,11 +94,12 @@ graph TB
 |---|---|---|
 | **Frontend Setup** | Turborepo, NPM Workspaces | Streamlined monorepo structure |
 | **Render Engine** | React Three Fiber (R3F), Drei | Main 3D abstractions and helpers |
-| **Dashboard** | React 18, Vite | High-performance SPA & editor logic |
+| **Dashboard** | Next.js 14 (App Router) | Unified auth, editor, and billing |
 | **Public Viewer** | Next.js 14 | Edge-cached SEO-friendly dynamic rendering |
-| **Styling** | Vanilla CSS, Core UI Package | Isolated rendering and UI boundaries |
-| **Backend/Auth** | Supabase Postgres | Authentication, config states, model hosting |
-| **Payments** | Stripe | Tiered subscription (Free, Starter, Pro) tracking |
+| **UI Components** | Tailwind CSS, Shadcn UI | Premium dark-mode first design system |
+| **Auth** | Supabase SSR (`@supabase/ssr`) | Passwordless OTP, server/browser split |
+| **Backend** | Supabase Postgres | Config persistence, user management |
+| **Payments** | Stripe | Tiered subscription (Free, Pro, Elite) |
 
 ---
 
@@ -108,48 +109,69 @@ graph TB
 Venture/
 │
 ├── apps/                               # ─── Consuming Applications ───
-│   ├── dashboard/                      # Vite app for users to upload and config assets
-│   └── viewer/                         # Next.js app serving the final 3D link to public
+│   ├── web/                            # Next.js 14 — Dashboard + Auth (UNIFIED)
+│   │   ├── app/
+│   │   │   ├── (auth)/                 # Login & signup (route group)
+│   │   │   │   ├── login/
+│   │   │   │   └── signup/
+│   │   │   ├── (dashboard)/            # Protected dashboard (route group)
+│   │   │   │   ├── projects/           # 3D project editor + live preview
+│   │   │   │   ├── settings/           # Profile & slug management
+│   │   │   │   └── billing/            # Plan selection (Free/Pro/Elite)
+│   │   │   ├── auth/callback/          # Supabase OTP callback handler
+│   │   │   └── page.tsx                # Public landing page
+│   │   ├── lib/
+│   │   │   ├── supabaseClient.ts       # Browser Supabase client
+│   │   │   ├── supabaseServer.ts       # Server Supabase client
+│   │   │   └── getUser.ts             # Server-safe session helper
+│   │   └── middleware.ts               # Route protection
+│   └── viewer/                         # Next.js — Public 3D viewer
 │
 ├── packages/                           # ─── Shared Workspace Libraries ───
-│   ├── engine/                         # Core WebGL runtime driven by r3f
-│   │   ├── src/scene                   # Object behaviors, lighting, meshes
-│   │   └── src/interactionSystem       # Config event handlers, registry, contexts
-│   ├── ui/                             # Global theming & visual consistency
-│   └── utils/                          # Cross-app tools (API parsers, migrations)
+│   ├── engine/                         # Core WebGL runtime (R3F)
+│   │   ├── src/scene/                  # Object behaviors, lighting, meshes
+│   │   └── src/interactionSystem/      # Config event handlers, registry
+│   ├── ui/                             # Shared UI primitives
+│   └── utils/                          # Config migration, Supabase helpers, Stripe
 │
 ├── package.json                        # Root Turborepo orchestration
-├── turbo.json                          # Turbo build / pipeline cache definitions
-└── index.html                          # Temporary root testing harness
+└── turbo.json                          # Turbo build / pipeline cache definitions
 ```
 
 ---
-
 
 ## 🚀 Getting Started
 
 ### 1. Prerequisites
 - Node.js 18+
-- Supabase Project & Stripe Developer Keys (Optional for local testing)
+- Supabase Project & Stripe Developer Keys (optional for local testing)
 
 ### 2. Setup
-Clone the repository and install workspace dependencies:
-
 ```bash
-# 1. Clone repository
+# Clone repository
 git clone https://github.com/YumiNoona/Venture.git
 cd Venture
 
-# 2. Install all workspaces
+# Install all workspaces
 npm install
 ```
 
-### 3. Run Development Server
-Leverage Turborepo to run all packages parallel:
+### 3. Environment Variables
+Create `apps/web/.env.local`:
+```env
+NEXT_PUBLIC_SUPABASE_URL=your_supabase_url
+NEXT_PUBLIC_SUPABASE_ANON_KEY=your_anon_key
+NEXT_PUBLIC_SITE_URL=http://localhost:3000
+```
 
+### 4. Run Development Server
 ```bash
 npm run dev
 ```
+
+This starts all apps in parallel via Turborepo:
+- **Dashboard**: `http://localhost:3000`
+- **Viewer**: `http://localhost:3001`
 
 ---
 

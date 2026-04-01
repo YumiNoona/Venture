@@ -11,9 +11,8 @@
   "dependencies": {
     "@supabase/ssr": "^0.3.0",
     "@supabase/supabase-js": "^2.42.0",
-    "@ventry/db": "workspace:*",
-    "@ventry/queue": "workspace:*",
-    "@ventry/ui": "workspace:*",
+    "@venture/ui": "*",
+    "@venture/utils": "*",
     "date-fns": "^4.1.0",
     "lucide-react": "^0.368.0",
     "next": "14.2.35",
