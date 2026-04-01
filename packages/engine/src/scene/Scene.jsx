@@ -19,7 +19,7 @@ import { useSeasonalTheme, SeasonButton } from "./SeasonalTheme"
 import {
   UIThemeProvider, useUITheme,
   ThemedButton, ThemeToggleButton,
-} from "./UITheme"
+} from "@venture/ui"
 
 // ── Detect mobile ─────────────────────────────────────────────────────────────
 const isMobile = () => {

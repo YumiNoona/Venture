@@ -10,6 +10,7 @@
     "@react-three/drei": "^9.122.0",
     "@react-three/postprocessing": "^2.15.11",
     "gsap": "^3.12.5",
-    "leva": "^0.10.1"
+    "leva": "^0.10.1",
+    "@venture/ui": "*"
   }
 }
