@@ -34,7 +34,7 @@ export default function App() {
       {/* Sidebar: Project Editor UI */}
       <div style={{ width: 320, borderRight: '1px solid #332b21', display: 'flex', flexDirection: 'column' }}>
         <div style={{ padding: 20, borderBottom: '1px solid #332b21' }}>
-          <h2>Vorld Dashboard</h2>
+          <h2>Venture Dashboard</h2>
           <div style={{ marginTop: 10 }}>
             <label style={{ fontSize: 12, opacity: 0.7 }}>Plan</label>
             <select 
@@ -81,7 +81,7 @@ export default function App() {
       <div style={{ flex: 1, position: 'relative' }}>
         {/* Render Engine Inline */}
         <Scene 
-          modelUrl="/models/vorld-placeholder.glb"
+          modelUrl="/models/venture-placeholder.glb"
           config={config} 
           onLoaded={handleSceneLoaded} 
           plan={plan}

@@ -1,0 +1,55 @@
+
+> web@0.1.0 build D:\Unreal\AI\Ventry\apps\web
+> next build
+
+  ▲ Next.js 14.2.3
+  - Environments: .env.local
+
+   Creating an optimized production build ...
+ ✓ Compiled successfully
+   Linting and checking validity of types ...
+   Collecting page data ...
+(node:27132) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+   Generating static pages (0/20) ...
+   Generating static pages (5/20) 
+(node:15040) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+   Generating static pages (10/20) 
+(Use `node --trace-deprecation ...` to show where the warning was created)
+   Generating static pages (15/20) 
+ ✓ Generating static pages (20/20)
+   Finalizing page optimization ...
+   Collecting build traces ...
+
+Route (app)                              Size     First Load JS
+┌ ○ /                                    181 B            94 kB
+├ ○ /_not-found                          873 B          87.9 kB
+├ ƒ /api/admin/stats                     0 B                0 B
+├ ƒ /api/auth/meta/callback              0 B                0 B
+├ ○ /api/auth/meta/login                 0 B                0 B
+├ ƒ /api/automations                     0 B                0 B
+├ ƒ /api/automations/[id]                0 B                0 B
+├ ƒ /api/webhooks/instagram              0 B                0 B
+├ ƒ /api/webhooks/stripe                 0 B                0 B
+├ ƒ /dashboard                           2 kB           95.8 kB
+├ ƒ /dashboard/analytics                 111 kB          206 kB
+├ ƒ /dashboard/automations               2.01 kB         104 kB
+├ ƒ /dashboard/automations/new           2.94 kB         105 kB
+├ ƒ /dashboard/calendar                  181 B            94 kB
+├ ƒ /dashboard/messages                  141 B          87.2 kB
+├ ƒ /dashboard/settings                  2.23 kB        97.6 kB
+├ ƒ /dashboard/settings/accounts         181 B            94 kB
+├ ƒ /dashboard/settings/billing          141 B          87.2 kB
+├ ƒ /login                               1.22 kB         103 kB
+└ ƒ /signup                              1.22 kB         103 kB
++ First Load JS shared by all            87 kB
+  ├ chunks/65d48fa5-77d00fcf1b7c459c.js  53.6 kB
+  ├ chunks/801-2aaf7b789ce429e8.js       31.4 kB
+  └ other shared chunks (total)          1.96 kB
+
+
+ƒ Middleware                             77.1 kB
+
+○  (Static)   prerendered as static content
+ƒ  (Dynamic)  server-rendered on demand
+

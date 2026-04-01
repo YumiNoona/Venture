@@ -230,7 +230,7 @@ const PATHS = [
   (t,b,r,h) => ({ x:b.x+Math.cos(t*.28)*r*2.0, y:b.y+h*1.3+Math.sin(t*1.1)*.12, z:b.z+Math.sin(t*.28)*r*1.6, ry:-t*.28 }),
 ]
 
-export default function Model({ modelUrl = "/models/vorld-placeholder.glb", config = {}, onLoaded, hovered, setHovered, selected, setSelected, debug, onDarkModeToggle, nightMode }) {
+export default function Model({ modelUrl = "/models/venture-placeholder.glb", config = {}, onLoaded, hovered, setHovered, selected, setSelected, debug, onDarkModeToggle, nightMode }) {
   const { scene } = useGLTF(modelUrl)
   const nodeMap   = useRef({})
   const states    = useRef({})

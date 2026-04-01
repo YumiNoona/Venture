@@ -35,7 +35,7 @@ export default function ViewerPage() {
   }, [])
 
   if (engineState.loading) {
-    return <div style={{ display: "grid", placeItems: "center", height: "100vh", background: "#0d0905", color: "#e8d5b0", fontFamily: "sans-serif" }}>Loading Vorld...</div>
+    return <div style={{ display: "grid", placeItems: "center", height: "100vh", background: "#0d0905", color: "#e8d5b0", fontFamily: "sans-serif" }}>Loading Venture...</div>
   }
 
   if (engineState.error) {
@@ -45,7 +45,7 @@ export default function ViewerPage() {
   return (
     <div style={{ width: "100vw", height: "100vh", position: "relative" }}>
       <Scene 
-        modelUrl="/models/vorld-placeholder.glb"
+        modelUrl="/models/venture-placeholder.glb"
         config={engineState.config}
         plan={engineState.plan}
       />

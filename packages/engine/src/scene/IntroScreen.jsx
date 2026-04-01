@@ -10,8 +10,8 @@ function getGreeting() {
 }
 
 const GREETING      = getGreeting()
-const TYPEWRITER_TEXT = `${GREETING}. Welcome to my room.`
-const SUB_TEXT = "An interactive 3D space — hover and click the objects to explore."
+const TYPEWRITER_TEXT = `${GREETING}. Welcome to Venture.`
+const SUB_TEXT = "An interactive 3D Venture space — hover and click the objects to explore."
 
 // ── Floating particle for dark mode loading screen ────────────────────────────
 function StarParticle({ style }) {

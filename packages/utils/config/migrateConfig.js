@@ -1,5 +1,5 @@
 /**
- * Migrates a Vorld project configuration object to the latest version.
+ * Migrates a Venture project configuration object to the latest version.
  * This ensures older saved configs safely power the latest engine features.
  */
 export function migrateConfig(rawConfig) {

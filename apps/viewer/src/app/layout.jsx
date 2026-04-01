@@ -1,6 +1,6 @@
 export const metadata = {
-  title: "Vorld Viewer",
-  description: "3D Project Viewer Powered by Vorld",
+  title: "Venture Viewer",
+  description: "3D Project Viewer Powered by Venture",
 }
 
 export default function RootLayout({ children }) {

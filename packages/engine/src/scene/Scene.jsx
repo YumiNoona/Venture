@@ -16,6 +16,7 @@ import VolumeSlider from "./VolumeSlider"
 import WallClock from "./WallClock"
 import KeyboardHelp, { useKeyboardShortcuts } from "./KeyboardHelp"
 import { useSeasonalTheme, SeasonButton } from "./SeasonalTheme"
+import InfoPanel from "./InfoPanel"
 import {
   UIThemeProvider, useUITheme,
   ThemedButton, ThemeToggleButton,
@@ -759,9 +760,12 @@ function SceneInner({ selected, setSelected, hovered, setHovered, nightMode, onD
           pointerEvents:"none", userSelect:"none",
           textTransform:"uppercase"
         }}>
-          Powered by Vorld
+          Powered by Venture
         </div>
       )}
+
+      {/* ── Info Panel ── */}
+      <InfoPanel selected={selected} onClose={() => setSelected(null)} />
 
       {/* ── Canvas ── */}
       <Canvas
@@ -775,7 +779,7 @@ function SceneInner({ selected, setSelected, hovered, setHovered, nightMode, onD
           toneMappingExposure: 1.1,
           outputColorSpace:THREE.SRGBColorSpace,
         }}
-        style={{ width:"100vw", height:"100vh" }}
+        style={{ width: "100%", height: "100%" }}
         onPointerMove={(e) => !mobile.current && setTooltipPos({ x:e.clientX, y:e.clientY })}
         onClick={() => startAudio()}
       >

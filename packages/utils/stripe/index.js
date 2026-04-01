@@ -8,8 +8,8 @@ export async function createCheckoutSession(userId, priceId) {
   //   payment_method_types: ['card'],
   //   line_items: [{ price: priceId, quantity: 1 }],
   //   mode: 'subscription',
-  //   success_url: 'https://vorld.app/dashboard?success=true',
-  //   cancel_url: 'https://vorld.app/dashboard?canceled=true',
+  //   success_url: 'https://venture.app/dashboard?success=true',
+  //   cancel_url: 'https://venture.app/dashboard?canceled=true',
   //   client_reference_id: userId,
   // })
   // return session

@@ -19,7 +19,7 @@ export const supabase = createClient(supabaseUrl, supabaseKey)
  * - id: uuid
  * - user_id: uuid (refs users.id)
  * - name: text
- * - config: jsonb (The Vorld engine interactions config)
+ * - config: jsonb (The Venture engine interactions config)
  * - config_version: int (e.g. 1, 2)
  * - updated_at: timestamp
  */
