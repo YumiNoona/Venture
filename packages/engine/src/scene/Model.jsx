@@ -2,17 +2,17 @@ import { useGLTF } from "@react-three/drei"
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useFrame } from "@react-three/fiber"
 import * as THREE from "three"
-import { INTERACTIVE_NAMES, OBJECT_META } from "../constants/objectMeta"
 
 // ── FIX: WeakMap cache so traverse only happens once per object, not per frame
 const _nameCache = new WeakMap()
-function findInteractiveName(obj) {
+function findInteractiveStableId(obj, interactiveIds) {
   if (_nameCache.has(obj)) return _nameCache.get(obj)
   let cur = obj
   while (cur) {
-    if (INTERACTIVE_NAMES.includes(cur.name)) {
-      _nameCache.set(obj, cur.name)
-      return cur.name
+    const sid = cur.userData.stableId
+    if (sid && interactiveIds.includes(sid)) {
+      _nameCache.set(obj, sid)
+      return sid
     }
     cur = cur.parent
   }
@@ -32,9 +32,12 @@ class SoundEngine {
   constructor() { this.ctx = null; this.enabled = true }
   _ctx() {
     if (!this.ctx) this.ctx = new (window.AudioContext || window.webkitAudioContext)()
+    if (this.ctx.state === "suspended") this.ctx.resume()
     return this.ctx
   }
   _play(fn) { if (!this.enabled) return; try { fn(this._ctx()) } catch(e) {} }
+  // ── FIX: cleanup AudioContext when needed (can be called if global state resets)
+  destroy() { if (this.ctx) { this.ctx.close(); this.ctx = null } }
 
   hover(type = "default") {
     this._play((ctx) => {
@@ -127,12 +130,13 @@ const soundEngine = new SoundEngine()
 // ─────────────────────────────────────────────────────────────────────────────
 // Outline — cached traverse + reused decompose vectors
 // ─────────────────────────────────────────────────────────────────────────────
-function LiveOutline({ targetRef, debug, objectName }) {
+function LiveOutline({ targetRef, debug, config, stableId }) {
   const meshRef    = useRef()
   const srcCache   = useRef(null)  // ← FIX: cache first-found mesh, not traverse every frame
   const prevTarget = useRef(null)
 
-  const objColor = objectName ? OBJECT_META[objectName]?.outlineColor : null
+  const meta = config?.objects?.[stableId]
+  const objColor = meta?.outlineColor
   const color = objColor ?? debug?.outlineColor ?? "#ffffff"
   const mat = useMemo(() => new THREE.MeshBasicMaterial({
     color: new THREE.Color(color), side: THREE.BackSide,
@@ -226,8 +230,8 @@ const PATHS = [
   (t,b,r,h) => ({ x:b.x+Math.cos(t*.28)*r*2.0, y:b.y+h*1.3+Math.sin(t*1.1)*.12, z:b.z+Math.sin(t*.28)*r*1.6, ry:-t*.28 }),
 ]
 
-export default function Model({ hovered, setHovered, selected, setSelected, debug, onDarkModeToggle, nightMode }) {
-  const { scene } = useGLTF("/models/Professor.glb")
+export default function Model({ modelUrl = "/models/Professor.glb", config = {}, hovered, setHovered, selected, setSelected, debug, onDarkModeToggle, nightMode }) {
+  const { scene } = useGLTF(modelUrl)
   const nodeMap   = useRef({})
   const states    = useRef({})
   const activeRef      = useRef(null)
@@ -243,28 +247,55 @@ export default function Model({ hovered, setHovered, selected, setSelected, debu
   const hoverStableTimer  = useRef(null)
   const HOVER_DEBOUNCE_MS = 80
 
+  const interactiveIds = useMemo(() => Object.keys(config?.objects || {}), [config])
+
   useEffect(() => {
+    // Re-run stable ID generation on scene load or config change (ideally scene load)
+    const nameCounts = {}
+    nodeMap.current = {}
+    states.current = {}
+    birdBases.current = {}
+
     scene.traverse(child => {
-      if (child.isMesh) { child.castShadow = true; child.receiveShadow = true }
-      if (INTERACTIVE_NAMES.includes(child.name)) {
-        nodeMap.current[child.name] = child
-        states.current[child.name] = {
-          hovered: false,
-          rotSpeed: 0, scaleVal: 1, scaleVel: 0,
-          wobble: 0, wobblePhase: Math.random() * Math.PI * 2,
-          pressY: 0, tiltAngle: 0, tiltVel: 0,
-          peckAngle: 0, peckVel: 0,
-          bobOffset: Math.random() * Math.PI * 2,
-          flightOffset: Math.random() * Math.PI * 2,
-          baseY: child.position.y, baseX: child.position.x, baseZ: child.position.z,
-          glintActive: false,
-          pianoNoteTimer: 0, pianoPlaying: false,
-          hatMagicTimer: 0, hatMagicActive: false,
-          candleFlameScale: 1,
+      if (child.isMesh) {
+        child.castShadow = true
+        child.receiveShadow = true
+
+        // Generate stable ID
+        const clean = (child.name || "mesh").trim().toLowerCase()
+        nameCounts[clean] = (nameCounts[clean] || 0) + 1
+        const stableId = `${clean}__${nameCounts[clean]}`
+        child.userData.stableId = stableId
+
+        // Check if interactive based on config
+        if (interactiveIds.includes(stableId)) {
+          nodeMap.current[stableId] = child
+          states.current[stableId] = {
+            hovered: false,
+            rotSpeed: 0, scaleVal: 1, scaleVel: 0,
+            wobble: 0, wobblePhase: Math.random() * Math.PI * 2,
+            pressY: 0, tiltAngle: 0, tiltVel: 0,
+            peckAngle: 0, peckVel: 0,
+            bobOffset: Math.random() * Math.PI * 2,
+            flightOffset: Math.random() * Math.PI * 2,
+            baseY: child.position.y, baseX: child.position.x, baseZ: child.position.z,
+            glintActive: false,
+            pianoNoteTimer: 0, pianoPlaying: false,
+            hatMagicTimer: 0, hatMagicActive: false,
+            candleFlameScale: 1,
+          }
+
+          // Special case behaviors left in engine for retro-compatibility (or they could be config-driven entirely eventually)
+          const isBird = config?.objects?.[stableId]?.interaction === "float"
+          if (isBird) {
+            birdBases.current[stableId] = { x: child.position.x, y: child.position.y, z: child.position.z }
+          }
+          if (config?.objects?.[stableId]?.interaction === "glint") {
+            mirrorNodeRef.current = child
+          }
         }
-        if (child.name.startsWith("Bird"))
-          birdBases.current[child.name] = { x: child.position.x, y: child.position.y, z: child.position.z }
-        if (child.name === "Mirror") mirrorNodeRef.current = child
+
+        // Keep fallback logic for Candle and others if needed, here via config fallback or names
         if (child.name === "Candle") {
           const p = new THREE.Vector3()
           child.getWorldPosition(p)
@@ -272,7 +303,7 @@ export default function Model({ hovered, setHovered, selected, setSelected, debu
         }
       }
     })
-  }, [scene])
+  }, [scene, interactiveIds, config])
 
   const K = 22, D = 0.72
 
@@ -288,10 +319,10 @@ export default function Model({ hovered, setHovered, selected, setSelected, debu
       candleLightRef.current.color.setRGB(1.0, Math.max(0.3, 0.45+n*0.09), Math.max(0, 0.05+n*0.02))
     }
 
-    INTERACTIVE_NAMES.forEach(name => {
-      const node = nodeMap.current[name], s = states.current[name]
+    Object.keys(nodeMap.current).forEach(stableId => {
+      const node = nodeMap.current[stableId], s = states.current[stableId]
       if (!node || !s) return
-      const meta = OBJECT_META[name]
+      const meta = config?.objects?.[stableId]
       if (!meta) return
 
       switch (meta.interaction) {
@@ -343,8 +374,8 @@ export default function Model({ hovered, setHovered, selected, setSelected, debu
           break
         }
         case "float": {
-          const idx  = parseInt(name.replace("Bird","")) - 1
-          const base = birdBases.current[name] ?? {x:0,y:2,z:0}
+          const idx  = parseInt(stableId.replace(/\D/g, "")) || 0
+          const base = birdBases.current[stableId] ?? {x:0,y:2,z:0}
           const spd = debug?.birdSpeed??1.0, r = debug?.birdRadius??1.0, h = debug?.birdHeight??0.3
           const fn  = PATHS[Math.min(idx, PATHS.length-1)]
           const p   = fn(t*spd+s.flightOffset, base, r, h)
@@ -410,24 +441,24 @@ export default function Model({ hovered, setHovered, selected, setSelected, debu
   })
 
   const handlePointerMove = (e) => {
-    const name = findInteractiveName(e.object)
-    if (name) {
+    const stableId = findInteractiveStableId(e.object, interactiveIds)
+    if (stableId) {
       e.stopPropagation()
-      if (activeNameRef.current === name) return
+      if (activeNameRef.current === stableId) return
       if (hoverStableTimer.current) clearTimeout(hoverStableTimer.current)
-      lastHoverName.current = name
+      lastHoverName.current = stableId
       hoverStableTimer.current = setTimeout(() => {
-        const stableName = lastHoverName.current
-        if (!stableName) return
-        if (activeNameRef.current && activeNameRef.current !== stableName)
+        const id = lastHoverName.current
+        if (!id) return
+        if (activeNameRef.current && activeNameRef.current !== id)
           states.current[activeNameRef.current].hovered = false
-        activeNameRef.current  = stableName
-        activeRef.current      = nodeMap.current[stableName] ?? null
-        states.current[stableName].hovered = true
-        setActiveNameState(stableName)
-        setHovered({ name: stableName, obj: nodeMap.current[stableName] })
+        activeNameRef.current  = id
+        activeRef.current      = nodeMap.current[id] ?? null
+        states.current[id].hovered = true
+        setActiveNameState(id)
+        setHovered({ name: id, stableId: id, obj: nodeMap.current[id] })
         document.body.style.cursor = "pointer"
-        const meta = OBJECT_META[stableName]
+        const meta = config?.objects?.[id]
         if (meta) soundEngine.hover(meta.interaction)
       }, HOVER_DEBOUNCE_MS)
     } else {
@@ -451,11 +482,11 @@ export default function Model({ hovered, setHovered, selected, setSelected, debu
   }
 
   const handleClick = (e) => {
-    const name = findInteractiveName(e.object)
-    if (!name) return
+    const stableId = findInteractiveStableId(e.object, interactiveIds)
+    if (!stableId) return
     e.stopPropagation()
-    const s    = states.current[name]
-    const meta = OBJECT_META[name]
+    const s    = states.current[stableId]
+    const meta = config?.objects?.[stableId]
     if (meta?.interaction === "wobble") {
       soundEngine.click("wobble")
       s.wobble = debug?.bottleClickWobble ?? 0.38
@@ -474,11 +505,11 @@ export default function Model({ hovered, setHovered, selected, setSelected, debu
     } else {
       soundEngine.click(meta?.interaction ?? "default")
     }
-    setSelected({ name, obj: nodeMap.current[name] })
+    setSelected({ name: stableId, stableId, obj: nodeMap.current[stableId] })
   }
 
   const showOutline = activeRef.current && activeNameState
-    && !OBJECT_META[activeNameState]?.noOutline
+    && !config?.objects?.[activeNameState]?.noOutline
 
   return (
     <>
@@ -498,7 +529,7 @@ export default function Model({ hovered, setHovered, selected, setSelected, debu
         color="#ff6010"
       />
       {showOutline && (
-        <LiveOutline targetRef={activeRef} debug={debug} objectName={activeNameState} />
+        <LiveOutline targetRef={activeRef} debug={debug} config={config} stableId={activeNameState} />
       )}
       {mirrorNodeRef.current && (
         <GlintEffect targetRef={mirrorNodeRef} activeRef={mirrorGlintActiveRef} debug={debug} />

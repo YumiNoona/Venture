@@ -1,5 +1,5 @@
 import { useState, useCallback } from "react"
-import { useUITheme } from "./UITheme"
+import { useUITheme } from "@venture/ui"
 
 export const SEASONS = {
   autumn: {
