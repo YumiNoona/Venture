@@ -1,5 +1,5 @@
 {
-  "name": "venture-monorepo",
+  "name": "venture",
   "private": true,
   "version": "1.0.0",
   "workspaces": [

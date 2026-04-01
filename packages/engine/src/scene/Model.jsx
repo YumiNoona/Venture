@@ -230,7 +230,7 @@ const PATHS = [
   (t,b,r,h) => ({ x:b.x+Math.cos(t*.28)*r*2.0, y:b.y+h*1.3+Math.sin(t*1.1)*.12, z:b.z+Math.sin(t*.28)*r*1.6, ry:-t*.28 }),
 ]
 
-export default function Model({ modelUrl = "/models/Professor.glb", config = {}, hovered, setHovered, selected, setSelected, debug, onDarkModeToggle, nightMode }) {
+export default function Model({ modelUrl = "/models/vorld-placeholder.glb", config = {}, onLoaded, hovered, setHovered, selected, setSelected, debug, onDarkModeToggle, nightMode }) {
   const { scene } = useGLTF(modelUrl)
   const nodeMap   = useRef({})
   const states    = useRef({})
@@ -255,6 +255,8 @@ export default function Model({ modelUrl = "/models/Professor.glb", config = {},
     nodeMap.current = {}
     states.current = {}
     birdBases.current = {}
+    
+    const extractedMeshIds = []
 
     scene.traverse(child => {
       if (child.isMesh) {
@@ -266,6 +268,8 @@ export default function Model({ modelUrl = "/models/Professor.glb", config = {},
         nameCounts[clean] = (nameCounts[clean] || 0) + 1
         const stableId = `${clean}__${nameCounts[clean]}`
         child.userData.stableId = stableId
+        
+        extractedMeshIds.push({ id: stableId, label: child.name || "Unnamed Mesh" })
 
         // Check if interactive based on config
         if (interactiveIds.includes(stableId)) {
@@ -303,7 +307,11 @@ export default function Model({ modelUrl = "/models/Professor.glb", config = {},
         }
       }
     })
-  }, [scene, interactiveIds, config])
+    
+    if (onLoaded) {
+      onLoaded(extractedMeshIds)
+    }
+  }, [scene, interactiveIds, config, onLoaded])
 
   const K = 22, D = 0.72
 

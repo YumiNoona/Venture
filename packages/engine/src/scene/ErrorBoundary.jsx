@@ -27,7 +27,7 @@ export default class ErrorBoundary extends React.Component {
         }}>
           <h1 style={{ fontSize: "2rem", marginBottom: "1rem" }}>📖 Something went wrong</h1>
           <p style={{ opacity: 0.8, maxWidth: 400, lineHeight: 1.6 }}>
-            The professor's study seems to have encountered a temporal glitch. 
+            The Vorld environment seems to have encountered a temporal glitch. 
             Please check your internet connection or try refreshing the page.
           </p>
           <button 

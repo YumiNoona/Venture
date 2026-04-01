@@ -5,6 +5,7 @@ import { EffectComposer, Bloom, Vignette } from "@react-three/postprocessing"
 import { Leva } from "leva"
 import * as THREE from "three"
 import Model from "./Model"
+import ErrorBoundary from "./ErrorBoundary"
 import CameraRig from "./CameraRig"
 import useDebugControls from "./DebugControls"
 import Tooltip from "./Tooltip"
@@ -573,7 +574,7 @@ function SeamlessBackground({ nightMode, season, debug }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // SceneInner — main UI layer + 3D canvas
 // ─────────────────────────────────────────────────────────────────────────────
-function SceneInner({ selected, setSelected, hovered, setHovered, nightMode, onDarkModeToggle, sparkleEnabled }) {
+function SceneInner({ selected, setSelected, hovered, setHovered, nightMode, onDarkModeToggle, sparkleEnabled, plan = "free", config = {}, modelUrl, onLoaded }) {
   const debug = useDebugControls()
   const { theme } = useUITheme()
 
@@ -749,6 +750,19 @@ function SceneInner({ selected, setSelected, hovered, setHovered, nightMode, onD
         </div>
       )}
 
+      {/* Feature Gating Watermark */}
+      {plan === "free" && (
+        <div style={{
+          position:"fixed", bottom:24, right:24, zIndex:30,
+          fontFamily: theme.font, fontSize:12, fontWeight:600,
+          color: theme.text, opacity:0.5, letterSpacing:"0.1em",
+          pointerEvents:"none", userSelect:"none",
+          textTransform:"uppercase"
+        }}>
+          Powered by Vorld
+        </div>
+      )}
+
       {/* ── Canvas ── */}
       <Canvas
         shadows={!mobile.current}   // ← mobile: disable shadows for perf
@@ -772,11 +786,14 @@ function SceneInner({ selected, setSelected, hovered, setHovered, nightMode, onD
         <SeamlessBackground nightMode={nightMode} season={season} debug={debug} />
 
         <Suspense fallback={null}>
-          <Model
-            hovered={hovered} setHovered={setHovered}
-            selected={selected} setSelected={setSelected}
-            debug={debug} onDarkModeToggle={onDarkModeToggle} nightMode={nightMode}
-          />
+          <ErrorBoundary>
+            <Model
+              modelUrl={modelUrl} config={config} onLoaded={onLoaded}
+              hovered={hovered} setHovered={setHovered}
+              selected={selected} setSelected={setSelected}
+              debug={debug} onDarkModeToggle={onDarkModeToggle} nightMode={nightMode}
+            />
+          </ErrorBoundary>
           <DustMotes nightMode={nightMode} debug={debug} />
 
           {/* Wall clock — positioned on back wall, no external model needed */}

@@ -6,7 +6,7 @@
 
 A professional-grade 3D engine to visualize, customize, and deploy interactive WebGL environments with dynamic configuration.
 
-[![Live Demo](https://img.shields.io/badge/🌐_Live_Demo-venture3d.app-8B5CF6?style=for-the-badge)](https://venture.venusapp.in/)
+[![Live Demo](https://img.shields.io/badge/🌐_Live_Demo-venture.app-8B5CF6?style=for-the-badge)](https://venture.venusapp.in/)
 [![GitHub](https://img.shields.io/badge/GitHub-Repository-181717?style=for-the-badge&logo=github)](#)
 
 ![React](https://img.shields.io/badge/React-18-61DAFB?style=flat-square&logo=react)
