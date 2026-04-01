@@ -1,8 +1,29 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { Scene } from "@venture/engine"
-import { migrateConfig } from "@venture/utils"
+import dynamic from "next/dynamic"
+
+// Dynamic import of the Venture Engine to prevent SSR hydration crashes in Next.js
+const Engine = dynamic(
+  () => import("@venture/engine").then((m) => m.Engine),
+  { 
+    ssr: false,
+    loading: () => (
+      <div style={{ 
+        display: "grid", 
+        placeItems: "center", 
+        height: "100vh", 
+        background: "#050505", 
+        color: "#ffffff", 
+        fontFamily: "Inter, sans-serif",
+        letterSpacing: "0.05em",
+        fontWeight: "bold"
+      }}>
+        LOADING VENTURE...
+      </div>
+    )
+  }
+)
 
 export default function ViewerPage() {
   const [engineState, setEngineState] = useState({
@@ -13,15 +34,14 @@ export default function ViewerPage() {
   })
 
   useEffect(() => {
-    // In a real application, fetch the config and plan from Supabase based on project slug.
-    // Here we simulate fetching & migrating a project config.
+    // Simulate fetching project config
     async function loadProject() {
       try {
+        // Fallback mock config
         const mockRawConfig = { version: 1, objects: { "mesh_0": "rotate" } }
-        const migrated = migrateConfig(mockRawConfig)
         
         setEngineState({
-          config: migrated,
+          config: mockRawConfig,
           loading: false,
           error: null,
           plan: "free"
@@ -35,17 +55,30 @@ export default function ViewerPage() {
   }, [])
 
   if (engineState.loading) {
-    return <div style={{ display: "grid", placeItems: "center", height: "100vh", background: "#0d0905", color: "#e8d5b0", fontFamily: "sans-serif" }}>Loading Venture...</div>
+    return null; // Handled by dynamic loading component
   }
 
   if (engineState.error) {
-    return <div style={{ display: "grid", placeItems: "center", height: "100vh", background: "#0d0905", color: "#e8d5b0", fontFamily: "sans-serif" }}>Error: {engineState.error}</div>
+    return (
+      <div style={{ 
+        display: "grid", 
+        placeItems: "center", 
+        height: "100vh", 
+        background: "#050505", 
+        color: "#ff4444" 
+      }}>
+        Error: {engineState.error}
+      </div>
+    )
   }
 
+  // Base path safety for modelUrl as requested
+  const modelUrl = "/models/venture-placeholder.glb"
+
   return (
-    <div style={{ width: "100vw", height: "100vh", position: "relative" }}>
-      <Scene 
-        modelUrl="/models/venture-placeholder.glb"
+    <div style={{ width: "100vw", height: "100vh", position: "relative", background: "#000" }}>
+      <Engine 
+        modelUrl={modelUrl}
         config={engineState.config}
         plan={engineState.plan}
       />

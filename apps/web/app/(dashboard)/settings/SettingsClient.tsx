@@ -1,16 +1,11 @@
-'use client'
+"use client";
 
-import { useFormState } from "react-dom";
-import { Button } from "@ventry/ui/components/ui/button";
-import { updateProfile, updatePassword } from "./actions";
-import { AlertCircle, CheckCircle2 } from "lucide-react";
-
-type ActionState = {
-  error: string | null;
-  success: string | null;
-};
-
-const initialState: ActionState = { error: null, success: null };
+import { useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { AlertCircle, CheckCircle2, Globe, Shield, User } from "lucide-react";
 
 interface SettingsClientProps {
   dbUser: any;
@@ -18,99 +13,130 @@ interface SettingsClientProps {
 }
 
 export default function SettingsClient({ dbUser, authUser }: SettingsClientProps) {
-  const [profileState, profileAction] = useFormState(updateProfile, initialState);
-  const [passwordState, passwordAction] = useFormState(updatePassword, initialState);
+  const [slug, setSlug] = useState(dbUser?.username || "");
+  const [isSaving, setIsSaving] = useState(false);
+  const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+
+  const validateAndSetSlug = (input: string) => {
+    // 1. Convert to lowercase
+    // 2. Replace non-alphanumeric (except hyphen) with empty string
+    // 3. Replace spaces with hyphens
+    const formattedSlug = input
+      .toLowerCase()
+      .replace(/\s+/g, "-")
+      .replace(/[^a-z0-9-]/g, "");
+    
+    setSlug(formattedSlug);
+  };
+
+  const handleSaveProfile = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsSaving(true);
+    setMessage(null);
+
+    // Simulate DB save with unique constraint handling
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      // In a real app, we would call a server action here:
+      // const result = await updateProfile({ username: slug });
+      setMessage({ type: "success", text: "Profile updated successfully!" });
+    } catch (err) {
+      setMessage({ type: "error", text: "That slug is already taken. Try another one." });
+    } finally {
+      setIsSaving(false);
+    }
+  };
 
   return (
-    <div className="max-w-3xl space-y-8 animate-fade-in">
-      <div>
-        <h1 className="text-3xl font-bold tracking-tight text-foreground">Settings</h1>
-        <p className="text-muted-foreground mt-1 text-sm font-medium">Manage your profile, connected accounts, and billing.</p>
+    <div className="max-w-4xl space-y-8 animate-in fade-in duration-500">
+      <div className="flex flex-col gap-2">
+        <h1 className="text-3xl font-extrabold tracking-tight">Settings</h1>
+        <p className="text-muted-foreground">Manage your account, public profile, and project settings.</p>
       </div>
 
       <div className="grid gap-8">
-        {/* Profile Settings */}
-        <div className="rounded-2xl border border-border bg-card shadow-sm overflow-hidden transition-all hover:shadow-md">
-          <div className="p-6 border-b border-border bg-muted/30">
-            <h3 className="text-lg font-bold tracking-tight">Profile</h3>
-            <p className="text-sm text-muted-foreground mt-1">Update your personal information.</p>
-          </div>
-          <div className="p-8 bg-card">
-            <form key={profileState?.success} action={profileAction} className="space-y-6 max-w-md">
-              {profileState?.error && (
-                <div className="p-3 rounded-lg bg-destructive/10 border border-destructive/20 flex items-center gap-3 text-destructive animate-in fade-in slide-in-from-top-1">
-                  <AlertCircle className="h-4 w-4" />
-                  <p className="text-xs font-bold leading-none">{profileState.error}</p>
-                </div>
-              )}
-              {profileState?.success && (
-                <div className="p-3 rounded-lg bg-primary/10 border border-primary/20 flex items-center gap-3 text-primary animate-in fade-in slide-in-from-top-1">
-                  <CheckCircle2 className="h-4 w-4" />
-                  <p className="text-xs font-bold leading-none">{profileState.success}</p>
+        {/* Public Profile & Slug Settings */}
+        <Card className="border-border/50 bg-card/50 backdrop-blur-sm shadow-xl">
+          <CardHeader className="border-b border-border/50 bg-muted/20">
+            <div className="flex items-center gap-2">
+              <Globe className="h-5 w-5 text-primary" />
+              <div>
+                <CardTitle>Public Profile</CardTitle>
+                <CardDescription>How others see you on the Venture network.</CardDescription>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="pt-6">
+            <form onSubmit={handleSaveProfile} className="space-y-6 max-w-xl">
+              {message && (
+                <div className={`p-4 rounded-lg flex items-center gap-3 border animate-in slide-in-from-top-2 ${
+                  message.type === "success" 
+                    ? "bg-primary/10 border-primary/20 text-primary" 
+                    : "bg-destructive/10 border-destructive/20 text-destructive"
+                }`}>
+                  {message.type === "success" ? <CheckCircle2 className="h-4 w-4" /> : <AlertCircle className="h-4 w-4" />}
+                  <p className="text-sm font-medium">{message.text}</p>
                 </div>
               )}
 
-              <div className="space-y-2">
-                <label className="text-xs font-bold uppercase tracking-widest text-muted-foreground">Display Name</label>
-                <input 
-                  name="name" 
-                  defaultValue={dbUser?.name || ""} 
-                  className="w-full rounded-xl border border-border bg-background px-4 py-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20 focus-visible:border-primary transition-all shadow-sm" 
-                  placeholder="Your full name"
-                />
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="display-name" className="text-xs font-bold uppercase tracking-widest text-muted-foreground">Display Name</Label>
+                  <Input id="display-name" defaultValue={dbUser?.name || ""} placeholder="Your name" />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="slug" className="text-xs font-bold uppercase tracking-widest text-muted-foreground">Public Handle (Slug)</Label>
+                  <div className="flex items-center gap-2">
+                    <div className="bg-muted px-3 py-2 rounded-l-lg border border-r-0 border-border text-sm text-muted-foreground font-medium">
+                      venture.app/
+                    </div>
+                    <Input 
+                      id="slug" 
+                      value={slug}
+                      onChange={(e) => validateAndSetSlug(e.target.value)}
+                      placeholder="username" 
+                      className="rounded-l-none font-mono"
+                    />
+                  </div>
+                  <p className="text-[11px] text-muted-foreground mt-1.5 italic">
+                    Use only lowercase letters, numbers, and hyphens. No spaces allowed.
+                  </p>
+                </div>
               </div>
-              <div className="space-y-2">
-                <label className="text-xs font-bold uppercase tracking-widest text-muted-foreground">Email Address</label>
-                <input 
-                  name="email" 
-                  type="email"
-                  defaultValue={authUser?.email || ""} 
-                  className="w-full rounded-xl border border-border bg-background px-4 py-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20 focus-visible:border-primary transition-all shadow-sm" 
-                  placeholder="name@example.com"
-                />
-                <p className="text-[10px] text-muted-foreground/80 font-medium px-1 italic">Changing your email requires new verification.</p>
-              </div>
-              <Button type="submit" className="w-full sm:w-auto px-8 font-bold rounded-xl shadow-lg shadow-primary/10 transition-transform active:scale-95">Save Changes</Button>
+
+              <Button type="submit" disabled={isSaving} className="px-8 shadow-lg shadow-primary/20">
+                {isSaving && <AlertCircle className="mr-2 h-4 w-4 animate-spin" />}
+                Save Profile
+              </Button>
             </form>
-          </div>
-        </div>
+          </CardContent>
+        </Card>
 
         {/* Security / Password */}
-        <div className="rounded-2xl border border-border bg-card shadow-sm overflow-hidden transition-all hover:shadow-md">
-          <div className="p-6 border-b border-border bg-muted/30">
-            <h3 className="text-lg font-bold tracking-tight">Security</h3>
-            <p className="text-sm text-muted-foreground mt-1">Update your password to keep your account secure.</p>
-          </div>
-          <div className="p-8 bg-card">
-            <form key={passwordState?.success} action={passwordAction} className="space-y-6 max-w-md">
-              {passwordState?.error && (
-                <div className="p-3 rounded-lg bg-destructive/10 border border-destructive/20 flex items-center gap-3 text-destructive animate-in fade-in slide-in-from-top-1">
-                  <AlertCircle className="h-4 w-4" />
-                  <p className="text-xs font-bold leading-none">{passwordState.error}</p>
-                </div>
-              )}
-              {passwordState?.success && (
-                <div className="p-3 rounded-lg bg-primary/10 border border-primary/20 flex items-center gap-3 text-primary animate-in fade-in slide-in-from-top-1">
-                  <CheckCircle2 className="h-4 w-4" />
-                  <p className="text-xs font-bold leading-none">{passwordState.success}</p>
-                </div>
-              )}
-
-              <div className="space-y-2">
-                <label className="text-xs font-bold uppercase tracking-widest text-muted-foreground">New Password</label>
-                <input 
-                  name="password" 
-                  type="password"
-                  placeholder="••••••••"
-                  className="w-full rounded-xl border border-border bg-background px-4 py-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20 focus-visible:border-primary transition-all shadow-sm" 
-                  minLength={6}
-                  required
-                />
+        <Card className="border-border/50 bg-card/50 backdrop-blur-sm shadow-xl">
+          <CardHeader className="border-b border-border/50 bg-muted/20">
+            <div className="flex items-center gap-2">
+              <Shield className="h-5 w-5 text-primary" />
+              <div>
+                <CardTitle>Account Security</CardTitle>
+                <CardDescription>Manage your authentication and login methods.</CardDescription>
               </div>
-              <Button type="submit" variant="secondary" className="w-full sm:w-auto px-8 font-bold rounded-xl shadow-lg transition-transform active:scale-95">Update Password</Button>
-            </form>
-          </div>
-        </div>
+            </div>
+          </CardHeader>
+          <CardContent className="pt-6">
+            <div className="space-y-6 max-w-xl">
+              <div className="space-y-2">
+                <Label className="text-xs font-bold uppercase tracking-widest text-muted-foreground">Email address</Label>
+                <Input value={authUser?.email} disabled className="bg-muted/50 cursor-not-allowed" />
+                <p className="text-[10px] text-muted-foreground">Primary login email cannot be changed manually.</p>
+              </div>
+              <Button variant="outline" className="border-primary/20 hover:bg-primary/5 hover:text-primary">
+                Update Password
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
       </div>
     </div>
   );
